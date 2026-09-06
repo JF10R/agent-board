@@ -306,6 +306,9 @@ class AgentBoardServer(ThreadingHTTPServer):
         try:
             return self.projects[name]
         except KeyError as exc:
+            matches = [project for key, project in self.projects.items() if key.casefold() == name.casefold()]
+            if len(matches) == 1:
+                return matches[0]
             raise board.BoardError(f"unknown project {name!r}; known: {', '.join(sorted(self.projects))}") from exc
 
     def roadmap_tree(self, since_hours: float = tree.DEFAULT_SINCE_HOURS, standby_hours: float = derive.DEFAULT_STANDBY_HOURS) -> dict[str, Any]:
@@ -474,7 +477,11 @@ class AgentBoardHandler(BaseHTTPRequestHandler):
             self._validate_host()
             path = urlsplit(self.path).path
             project = self._query_project() if path.startswith("/api/") else self.server.default_project
-            if path == "/":
+            friendly = path.split("/")
+            if len(friendly) == 4 and friendly[1] == "tickets":
+                project = self.server.project(unquote(friendly[2]))
+                resolve_ticket_reference(project.board_root, unquote(friendly[3]))
+            if path == "/" or (len(friendly) == 4 and friendly[1] == "tickets"):
                 # Never conditionally cached: the body embeds this process's write token, which
                 # ui_version() (file mtimes only) cannot see, so a 304 here would resurrect a
                 # stale token after every server restart no browser reload could then clear.
@@ -596,6 +603,10 @@ class AgentBoardHandler(BaseHTTPRequestHandler):
                         ),
                     },
                 )
+            elif path.startswith("/api/tickets/resolve/"):
+                reference = unquote(path.removeprefix("/api/tickets/resolve/"))
+                resolved = resolve_ticket_reference(project.board_root, reference)
+                self._json(HTTPStatus.OK, {"ok": True, "project": project.name, "ticket": ticket_detail(project.board_root, resolved)})
             elif path.startswith("/api/tickets/") and path.endswith("/export"):
                 ticket_id = unquote(path.removeprefix("/api/tickets/").removesuffix("/export"))
                 self._send(HTTPStatus.OK, tickets.export_ticket_markdown(project.board_root, ticket_id).encode("utf-8"), "text/markdown; charset=utf-8")
@@ -750,6 +761,20 @@ def _string_list(value: Any, label: str, item_cap: int) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise board.BoardError(f"{label} must be a list of strings")
     return [_string(item, f"{label} entry", item_cap) for item in value]
+
+
+def resolve_ticket_reference(root: Path, reference: str) -> str:
+    reference = board._require_safe_token("ticket reference", reference)
+    # Exact canonical IDs keep their historical meaning, even when a display ID
+    # looks similar. Friendly links otherwise resolve through frozen identity data.
+    if tickets._ticket_events_path(root, reference).is_file():
+        tickets.get_ticket(root, reference)
+        return reference
+    matches = [ticket_id for ticket_id, display_id in tickets._read_display_ids(root)["ids"].items() if display_id.casefold() == reference.casefold()]
+    if len(matches) == 1:
+        tickets.get_ticket(root, matches[0])
+        return matches[0]
+    raise board.BoardError(f"unknown ticket reference: {reference}")
 
 
 def ticket_list(root: Path, **filters: Any) -> list[dict[str, Any]]:
