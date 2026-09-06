@@ -515,3 +515,6 @@ dialog form, dialog .dialog-body { padding: 6px 20px 20px; }
 .ticket-message-status { display: flex; flex-wrap: wrap; gap: 6px; }
 .ticket-message-replies { display: grid; gap: 5px; margin: 10px 0 0 12px; padding-left: 12px; border-left: 2px solid var(--line-strong); font-size: var(--fs-sm); }
 .ticket-message-replies a { color: var(--accent); overflow-wrap: anywhere; }
+
+.ticket-permission-note { margin: 14px 24px 0; font-size: var(--fs-xs); }
+.ticket-command-bar button:disabled, .ticket-properties button:disabled { opacity: .45; cursor: not-allowed; }

@@ -231,7 +231,9 @@ function populateChoices() {
   [["roadmap-actor",state.choices.identities],["filter-kind",state.choices.kinds],["compose-kind",state.choices.kinds],["filter-priority",state.choices.priorities],["compose-priority",state.choices.priorities],["roadmap-status",state.choices.roadmap_statuses],["filter-rstatus",state.choices.roadmap_statuses],["roadmap-kind",state.choices.roadmap_kinds||[]],["filter-rkind",state.choices.roadmap_kinds||[]]].forEach(([id, values]) => syncOptions($(id), values));
   syncOptions($("roadmap-owner"), state.choices.roadmap_owners, actorLabels);
   syncOptions($("filter-rowner"), state.choices.roadmap_owners, actorLabels);
-  syncOptions($("ticket-actor"), state.choices.identities, actorLabels);
+  syncOptions($("ticket-actor"), ticketActingActors(), actorLabels);
+  if (!$("ticket-actor").dataset.ready) { $("ticket-actor").value = "operator"; $("ticket-actor").dataset.ready = "true"; }
+  updateTicketCreatePermission();
   syncOptions($("ticket-kind"), state.choices.ticket_kinds || []);
   if (!$("compose-priority").value) $("compose-priority").value = "NORMAL";
 }
@@ -262,7 +264,11 @@ function setView(name, {focus=false}={}) {
     $(`view-${view}`).hidden = view !== name;
     $(`nav-${view}`).setAttribute("aria-selected", String(view === name));
   }
-  if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
+  if (parseTicketRoute()) {
+    const url = new URL(location.href); url.hash = "";
+    if (name !== "tickets") { url.pathname = "/"; url.searchParams.set("view", name); url.searchParams.set("project", activeProjectName()); }
+    history.replaceState(null, "", url);
+  } else if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
   if (focus) $(`nav-${name}`).focus();
 }
 
@@ -968,6 +974,14 @@ function ticketBlockerMarkup(item) {
   return `<div class="ticket-blocker-banner"><strong>Waiting on ${blockers.length} blocking ${blockers.length === 1 ? "ticket" : "tickets"}</strong><span>${blockers.map(({id, ticket}) => `<a href="${escapeText(ticketUrl(id).href)}">${escapeText(ticket?.display_id || id)}${ticket ? ` · ${escapeText(ticket.title)}` : ' · dependency unavailable'}</a>`).join("<br>")}</span></div>`;
 }
 
+function ticketActingActors() { return [...new Set(["operator", "lead", ...state.choices.identities])]; }
+
+function updateTicketCreatePermission() {
+  const allowed = state.choices.identities.includes($("ticket-actor").value);
+  $("ticket-form").querySelector('[type="submit"]').disabled = !allowed;
+  $("ticket-create-permission").textContent = allowed ? "" : "Creating tickets requires a master role. Choose a master explicitly to create this ticket.";
+}
+
 function ticketMatches(item) {
   const assignee = $("filter-tassignee").value;
   if (assignee && item.assignee !== assignee) return false;
@@ -1043,7 +1057,7 @@ async function loadTicketDiscussion(id) {
 }
 
 function ticketMessageUrl(id) {
-  const url = new URL(location.href); url.hash = "";
+  const url = new URL(location.href); url.hash = ""; url.pathname = "/";
   url.searchParams.set("view", "messages"); url.searchParams.set("project", activeProjectName());
   url.searchParams.delete("ticket"); url.searchParams.set("message", id); return url;
 }
@@ -1111,12 +1125,12 @@ function renderTicketDetail() {
   const descriptionOpen = sameTicket ? detail.querySelector(".ticket-description")?.open : item.body.length < 1200;
   detail.dataset.ticketId = item.id;
   detail.className = "detail-panel ticket-issue";
-  const identities = state.choices.identities || [];
+  const identities = ticketActingActors();
   const lease = item.lease;
   const options = TICKET_LANES.filter(([key]) => key !== "DONE").map(([key, title]) => `<option value="${key}" ${key === item.stage ? "selected" : ""}>${escapeText(title)}</option>`).join("");
   detail.innerHTML = `<div class="ticket-breadcrumb"><button id="ticket-back" type="button" class="ghost">← Tickets</button><span>/</span><span class="ticket-project-name">${escapeText(activeProjectName() || "Project")}</span><span>/</span><button id="ticket-copy-id" type="button" class="ghost mono" title="Copy ticket ID">${escapeText(item.display_id || item.id)}</button><button id="ticket-copy-link" type="button" class="ghost">Copy link</button><button id="ticket-copy-md" type="button" class="ghost ticket-export">Copy Markdown</button></div>
-    <header class="ticket-issue-head"><div class="badges">${ticketStagePill(item.stage)}${tagMarkup(item.kind)}</div><h2>${escapeText(item.title)}</h2><div class="ticket-command-bar"><button id="ticket-reply" type="button" class="secondary">Comment</button><button id="ticket-review-open" type="button" class="secondary">Record review</button><button id="ta-done" type="button" class="ghost">✓ Mark done</button><label class="ticket-acting">Acting as <select id="ta-actor" aria-label="Acting master">${identities.map(id => `<option value="${escapeText(id)}">${escapeText(ticketActorLabel(id))}</option>`).join("")}</select></label></div></header>
-    ${ticketBlockerMarkup(item)}<p id="ta-error" class="error" role="alert"></p>
+    <header class="ticket-issue-head"><div class="badges">${ticketStagePill(item.stage)}${tagMarkup(item.kind)}</div><h2>${escapeText(item.title)}</h2><div class="ticket-command-bar"><button id="ticket-reply" type="button" class="secondary">Comment</button><button id="ticket-review-open" type="button" class="secondary">Record review</button><button id="ta-done" type="button" class="ghost">✓ Mark done</button><label class="ticket-acting">Acting as <select id="ta-actor" aria-label="Acting identity">${identities.map(id => `<option value="${escapeText(id)}" ${id === "operator" ? "selected" : ""}>${escapeText(ticketActorLabel(id))}</option>`).join("")}</select></label></div></header>
+    <p id="ticket-action-permission" class="quiet ticket-permission-note"></p>${ticketBlockerMarkup(item)}<p id="ta-error" class="error" role="alert"></p>
     <div class="ticket-issue-grid"><div class="ticket-main">
       ${item.summary ? `<p class="ticket-summary">${escapeText(item.summary)}</p>` : ""}
       ${item.body ? `<details class="ticket-description" ${descriptionOpen ? "open" : ""}><summary>Description <span class="quiet">${item.body.length >= 1200 ? "Full context" : ""}</span></summary><div class="markdown-body">${renderMarkdown(item.body)}</div></details>` : ""}
@@ -1161,11 +1175,25 @@ function renderTicketDetail() {
     catch (error) { toast(error.message); }
   };
   const actor = () => $("ta-actor").value;
+  const updatePermissions = () => {
+    const master = state.choices.identities.includes(actor());
+    const owner = item.reviewer || (item.assignee || actor()).split("/")[0];
+    const reviewAllowed = master && actor().split("/")[0] === owner.split("/")[0];
+    const leaseAllowed = item.lease?.assignee === actor();
+    for (const id of ["ticket-assign-open", "ta-assign", "ta-transition", "ta-stage", "ta-done"]) {
+      $(id).disabled = !master; $(id).title = master ? "" : "Requires a master role";
+    }
+    for (const id of ["ticket-review-open", "ta-review"]) { $(id).disabled = !reviewAllowed; $(id).title = reviewAllowed ? "" : "Only the ticket's owning master can record a review"; }
+    $("ta-heartbeat").disabled = !leaseAllowed; $("ta-heartbeat").title = leaseAllowed ? "" : "Only the current lease assignee can renew it";
+    $("ticket-action-permission").textContent = !master ? "You can comment as this identity. Assignment, stage changes, reviews and completion require the appropriate master; lease renewal requires its assignee." : !reviewAllowed ? "Reviews are reserved for this ticket's owning master. Lease renewal is reserved for its assignee." : "Lease renewal is reserved for its current assignee.";
+  };
+  $("ta-actor").onchange = updatePermissions;
+  updatePermissions();
   const perform = async (button, action, body, errorId = "ta-error", onSuccess = () => {}) => {
     $(errorId).textContent = ""; button.disabled = true;
     try { await ticketAction(item.id, action, {actor: actor(), ...body}); onSuccess(); await refresh(); }
     catch (error) { $(errorId).textContent = error.message; }
-    finally { if (button.isConnected) button.disabled = false; }
+    finally { if (button.isConnected) { button.disabled = false; updatePermissions(); } }
   };
   $("ticket-assign-form").onsubmit = event => { event.preventDefault(); perform($("ta-assign"), "assign", {assignee: $("ta-assignee").value}, "ta-assign-error", () => $("ticket-assign-dialog").close()); };
   $("ta-heartbeat").onclick = () => perform($("ta-heartbeat"), "heartbeat", {});
@@ -1184,11 +1212,32 @@ function renderTicketDetail() {
 }
 
 function ticketUrl(id) {
-  const url = new URL(location.href);
-  url.hash = ""; url.searchParams.set("view", "tickets");
-  url.searchParams.set("project", activeProjectName());
-  if (id) url.searchParams.set("ticket", id); else url.searchParams.delete("ticket");
+  const url = new URL(location.href); url.hash = "";
+  if (id) {
+    const display = ticketsById().get(id)?.display_id;
+    url.pathname = `/tickets/${encodeURIComponent(activeProjectName())}/${encodeURIComponent(display ? display.toLowerCase() : id)}`;
+    for (const key of ["view", "project", "ticket", "message", "item"]) url.searchParams.delete(key);
+  } else {
+    url.pathname = "/"; url.searchParams.set("view", "tickets"); url.searchParams.set("project", activeProjectName()); url.searchParams.delete("ticket"); url.searchParams.delete("message");
+  }
   return url;
+}
+
+function parseTicketRoute() {
+  const match = location.pathname.match(/^\/tickets\/([^/]+)\/([^/]+)\/?$/);
+  if (!match) return null;
+  try { return {project: decodeURIComponent(match[1]), ref: decodeURIComponent(match[2])}; } catch { return null; }
+}
+
+async function openTicketRoute(route) {
+  try {
+    const value = await api(withProject(`/api/tickets/resolve/${encodeURIComponent(route.ref)}`, route.project));
+    if (value.project && value.project !== activeProjectName()) await setProject(value.project, false);
+    const item = value.ticket;
+    state.tickets = state.tickets.some(ticket => ticket.id === item.id) ? state.tickets.map(ticket => ticket.id === item.id ? item : ticket) : [...state.tickets, item];
+    ticketDiscussions.set(`${activeProjectName()}/${item.id}`, {messages: item.linked_messages || [], malformed: item.linked_messages_malformed || 0});
+    setView("tickets"); selectTicket(item.id, false);
+  } catch (error) { toast(error.message); }
 }
 
 function selectTicket(id, navigate = true) {
@@ -1198,6 +1247,8 @@ function selectTicket(id, navigate = true) {
 }
 
 window.addEventListener("popstate", async () => {
+  const friendly = parseTicketRoute();
+  if (friendly) { await openTicketRoute(friendly); return; }
   const route = new URL(location.href);
   const project = route.searchParams.get("project");
   if (project && project !== activeProjectName() && projects.some(item => item.name === project)) await setProject(project, false);
@@ -1220,7 +1271,7 @@ function renderTickets() {
   updateVisibleTimes();
 }
 
-function openTicketForm() { ticketFormOpener = document.activeElement; $("ticket-form").classList.remove("hidden"); $("ticket-form-error").textContent = ""; $("ticket-form").reset(); $("ticket-form").scrollIntoView({block: "nearest"}); $("ticket-title").focus(); }
+function openTicketForm() { ticketFormOpener = document.activeElement; $("ticket-form").classList.remove("hidden"); $("ticket-form-error").textContent = ""; $("ticket-form").reset(); $("ticket-actor").value = "operator"; updateTicketCreatePermission(); $("ticket-form").scrollIntoView({block: "nearest"}); $("ticket-title").focus(); }
 function closeTicketForm() { $("ticket-form").classList.add("hidden"); (ticketFormOpener?.isConnected ? ticketFormOpener : $("new-ticket"))?.focus(); ticketFormOpener = null; }
 
 // ---------- refresh loop ----------
@@ -1416,6 +1467,7 @@ const storedStandby=store(STORAGE.standby);if(storedStandby&&[...$("standby-hour
 $("standby-hours").addEventListener("change",()=>{store(STORAGE.standby,$("standby-hours").value);renderSignals();refresh();});
 $("new-roadmap").onclick=()=>openRoadmap();$("cancel-roadmap").onclick=closeRoadmapEditor;$("roadmap-status").addEventListener("change",syncRoadmapFields);
 $("roadmap-form").addEventListener("submit",async event=>{event.preventDefault();try{const extension=changedExtension();await api("/api/roadmap",{method:"POST",body:JSON.stringify({project:activeProjectName(),actor:$("roadmap-actor").value,id:$("roadmap-id").value,title:$("roadmap-title").value,summary:$("roadmap-summary").value,status:$("roadmap-status").value,owner:$("roadmap-owner").value,progress:Number($("roadmap-progress").value),blocker:$("roadmap-blocker").value,expected_revision:Number($("roadmap-revision").value),...extension})});const id=$("roadmap-id").value;closeRoadmapEditor();toast("Roadmap item saved");await refresh();selectRoadmap(id);}catch(error){$("roadmap-error").textContent=error.message;}});
+$("ticket-actor").addEventListener("change",updateTicketCreatePermission);
 $("new-ticket").onclick=()=>openTicketForm();$("cancel-ticket").onclick=closeTicketForm;
 $("ticket-form").addEventListener("submit",async event=>{event.preventDefault();try{const created=await ticketApi("/api/tickets",{actor:$("ticket-actor").value,title:$("ticket-title").value,kind:$("ticket-kind").value,summary:$("ticket-summary").value,body:$("ticket-body").value,parent:$("ticket-parent").value||undefined,assignee:$("ticket-assignee").value||undefined,reviewer:$("ticket-reviewer").value||undefined});const id=created.ticket.id;closeTicketForm();toast(`${created.ticket.display_id || "Ticket"} created`);await refresh();selectTicket(id);}catch(error){$("ticket-form-error").textContent=error.message;}});
 ["filter-tassignee","ticket-show-closed"].forEach(id=>$(id).addEventListener("change",renderTickets));
@@ -1428,6 +1480,8 @@ document.addEventListener("visibilitychange",()=>{if(document.hidden)scheduleVer
 
 // Deep links: ?view=roadmap&rmode=overview&theme=light&since=72&standby=72&closed=1&item=<id>&message=<id>
 const params=new URLSearchParams(location.search);
+const initialTicketRoute = parseTicketRoute();
+if (initialTicketRoute) { params.set("view", "tickets"); params.set("project", initialTicketRoute.project); }
 initTheme();
 if(params.get("theme")==="light"||params.get("theme")==="dark")applyTheme(params.get("theme"));
 if(["overview","tree","kanban","timeline"].includes(params.get("rmode")||""))roadmapMode=params.get("rmode");
@@ -1435,4 +1489,4 @@ if([...$("roadmap-since").options].some(option=>option.value===params.get("since
 if([...$("standby-hours").options].some(option=>option.value===params.get("standby")))$("standby-hours").value=params.get("standby");
 if(params.get("closed")==="1")$("roadmap-show-closed").checked=true;
 setView(params.get("view")||location.hash.slice(1)||store(STORAGE.view)||"messages");
-loadProjects().then(refresh).then(()=>{if(params.get("item"))selectRoadmap(params.get("item"));if(params.get("message"))showMessage(params.get("message"));if(params.get("ticket"))selectTicket(params.get("ticket"),false);}).finally(pollVersion);
+loadProjects().then(refresh).then(()=>{if(params.get("item"))selectRoadmap(params.get("item"));if(params.get("message"))showMessage(params.get("message"));if(initialTicketRoute)return openTicketRoute(initialTicketRoute);if(params.get("ticket"))selectTicket(params.get("ticket"),false);}).finally(pollVersion);
