@@ -1121,10 +1121,10 @@ function renderTicketDetail() {
       ${item.summary ? `<p class="ticket-summary">${escapeText(item.summary)}</p>` : ""}
       ${item.body ? `<details class="ticket-description" ${descriptionOpen ? "open" : ""}><summary>Description <span class="quiet">${item.body.length >= 1200 ? "Full context" : ""}</span></summary><div class="markdown-body">${renderMarkdown(item.body)}</div></details>` : ""}
       ${item.acceptance_criteria.length ? `<section class="ticket-criteria"><h3>Acceptance criteria</h3><ul>${item.acceptance_criteria.map(text => `<li>${escapeText(text)}</li>`).join("")}</ul></section>` : ""}
+      ${ticketDiscussionMarkup(discussion)}
       <section class="ticket-discussion" aria-labelledby="ticket-activity-title"><div class="ticket-discussion-head"><h3 id="ticket-activity-title">Activity</h3><span>${item.comments.length} comment${item.comments.length === 1 ? "" : "s"}</span></div>
         <div class="ticket-composer"><label class="sr-only" for="ta-comment">Write a comment</label><textarea id="ta-comment" rows="4" maxlength="32768" placeholder="Write a comment, share an update, or ask a question…"></textarea><div class="ticket-composer-foot"><span class="quiet">Markdown supported</span><button id="ta-comment-btn" type="button" class="primary">Send comment</button></div><p id="ta-comment-error" class="error" role="alert"></p></div>${ticketActivityMarkup(item)}
       </section>
-      ${ticketDiscussionMarkup(discussion)}
     </div><aside class="ticket-properties" aria-label="Ticket properties"><h3>Properties</h3><dl>
       <dt>Status</dt><dd><div class="ticket-status-control"><select id="ta-stage" aria-label="Move ticket to stage">${item.stage === "DONE" ? '<option value="" selected disabled>Done</option>' : ""}${options}</select><button id="ta-transition" type="button" class="ghost">Apply</button></div></dd>
       <dt>Assignee</dt><dd><button id="ticket-assign-open" type="button" class="ticket-property-button" title="${escapeText(item.assignee || "Unassigned")}">${escapeText(ticketActorLabel(item.assignee))}<span aria-hidden="true">↗</span></button></dd>
