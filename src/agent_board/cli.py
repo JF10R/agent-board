@@ -1507,7 +1507,7 @@ def _add_ticket_subparsers(subparsers: argparse._SubParsersAction, identities: S
     worklog.add_argument("--actor", required=True)
     worklog.add_argument("--id", required=True, dest="ticket_id")
     worklog.add_argument("--summary", required=True)
-    worklog.add_argument("--repo")
+    worklog.add_argument("--repo", dest="evidence_repo")
     worklog.add_argument("--sha")
     worklog.add_argument("--test")
     worklog.add_argument("--exit-code", type=int)
@@ -1569,8 +1569,8 @@ def _read_ticket_body(args: argparse.Namespace) -> str:
 
 def _ticket_evidence_from_args(args: argparse.Namespace) -> dict[str, Any]:
     evidence: dict[str, Any] = {}
-    if args.repo is not None or args.sha is not None:
-        evidence["repo"] = args.repo or ""
+    if args.evidence_repo is not None or args.sha is not None:
+        evidence["repo"] = args.evidence_repo or ""
         evidence["sha"] = args.sha or ""
     if args.test is not None or args.exit_code is not None:
         evidence["test"] = args.test or ""
@@ -1698,8 +1698,14 @@ def _project_hint(argv: Sequence[str] | None) -> dict[str, Any]:
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--repo", type=Path)
     pre.add_argument("--root", dest="maintenance_root", type=Path)
+    pre.add_argument("command", nargs="?")
+    pre.add_argument("arguments", nargs=argparse.REMAINDER)
     try:
+        # Stop global parsing at the command: worklog --repo is evidence.
         known, _ = pre.parse_known_args(argv)
+        if known.command == "maintenance":
+            maintenance, _ = pre.parse_known_args(known.arguments)
+            known.maintenance_root = maintenance.maintenance_root
         return project_config(known.maintenance_root or board_root(known.repo))
     except (BoardError, OSError, SystemExit, ValueError):
         return project_config(None)
