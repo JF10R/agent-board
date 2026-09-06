@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="agent-board-token" content="__BOARD_TOKEN__">
+  <title>Agent Board</title>
+  <link rel="stylesheet" href="/styles.css?v=20260905r2">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="shell">
+    <aside class="rail" aria-label="Board navigation">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">A</span><span><strong>Agent Board</strong></span></div>
+      <nav class="views" role="tablist" aria-label="Views">
+        <button id="nav-messages" type="button" role="tab" aria-selected="true" aria-controls="view-messages" data-view="messages">Inbox <span id="nav-messages-count" class="rail-count">0</span><kbd>1</kbd></button>
+        <button id="nav-roadmap" type="button" role="tab" aria-selected="false" aria-controls="view-roadmap" data-view="roadmap">Roadmap <span id="nav-roadmap-count" class="rail-count">0</span><kbd>2</kbd></button>
+        <button id="nav-tickets" type="button" role="tab" aria-selected="false" aria-controls="view-tickets" data-view="tickets">Tickets <span id="nav-tickets-count" class="rail-count">0</span><kbd>3</kbd></button>
+        <button id="nav-presence" type="button" role="tab" aria-selected="false" aria-controls="view-presence" data-view="presence">Masters &amp; leases <span id="nav-presence-count" class="rail-count">0</span><kbd>4</kbd></button>
+      </nav>
+      <section class="rail-section" aria-labelledby="backlog-heading">
+        <h2 id="backlog-heading" class="label">Awaiting acknowledgement</h2>
+        <div id="ack-backlog" aria-live="polite"></div>
+      </section>
+      <section class="rail-section" aria-labelledby="signals-heading">
+        <h2 id="signals-heading" class="label">Roadmap signals</h2>
+        <button id="signal-startable" type="button" class="rail-row green" data-focus="startable"><span><span class="name">Ready to start</span><span class="since">no blocker, no open dependency</span></span><span class="n">0</span></button>
+        <button id="signal-standby" type="button" class="rail-row amber" data-focus="standby"><span><span class="name">In standby</span><span class="since" id="signal-standby-note">in progress, silent 48 h+</span></span><span class="n">0</span></button>
+        <button id="signal-blocked" type="button" class="rail-row red" data-focus="blocked"><span><span class="name">Blocked</span><span class="since">what blocks each one</span></span><span class="n">0</span></button>
+      </section>
+      <div class="rail-foot">
+        <div id="connection" class="connection reconnecting" role="status" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span class="connection-label">Reconnecting</span></div>
+        <time id="last-updated">No successful refresh yet</time>
+        <button id="ui-update" type="button" class="ui-update hidden">New board UI available — reload</button>
+        <div class="rail-actions"><button id="theme-toggle" type="button" aria-pressed="false">Light theme</button><button id="shortcuts-button" type="button">Shortcuts <kbd>?</kbd></button></div>
+      </div>
+    </aside>
+    <main id="main">
+      <section id="view-messages" class="view" role="tabpanel" aria-labelledby="nav-messages">
+        <header class="view-head">
+          <div class="view-head-row">
+            <div><p class="eyebrow">Coordination channel · immutable Markdown messages</p><h1>Inbox <span id="message-count" class="count">0</span></h1></div>
+            <button id="show-compose" type="button" class="primary">Compose <kbd>c</kbd></button>
+          </div>
+          <div class="toolbar" aria-label="Message filters">
+            <label id="project-switch" class="hidden">Project <select id="project-select"></select></label>
+            <label class="sr-only" for="search">Search messages</label>
+            <input id="search" type="search" placeholder="Search summary, id, workstream, sender…  ( / )" autocomplete="off">
+            <label>Actor <select id="filter-actor"><option value="">all</option></select></label>
+            <label>Kind <select id="filter-kind"><option value="">all</option></select></label>
+            <label>Priority <select id="filter-priority"><option value="">all</option></select></label>
+            <label>Workstream <select id="filter-workstream"><option value="">all</option></select></label>
+            <label>Ack <select id="filter-ack"><option value="">any</option><option value="pending">pending</option><option value="acked">acknowledged</option><option value="required">required</option></select></label>
+            <label class="toggle"><input id="unacked-first" type="checkbox" checked> Unacked first</label>
+            <div class="seg" role="group" aria-label="List mode"><button id="mode-threads" type="button" aria-pressed="true">Threads</button><button id="mode-flat" type="button" aria-pressed="false">Flat</button></div>
+            <button id="clear-filters" type="button" class="ghost">Clear</button>
+          </div>
+        </header>
+        <div id="selection-bar" class="selection-bar hidden" role="region" aria-label="Selected messages"><strong id="selection-count">0 selected</strong><span class="quiet">Copied oldest first, each with its title, provenance and body.</span><span class="spacer"></span><button id="copy-selected" type="button" class="primary">Copy selected bodies</button><button id="select-shown" type="button" class="ghost">Select all shown</button><button id="clear-selection" type="button" class="ghost">Clear <kbd>Esc</kbd></button></div>
+        <div class="panel message-layout">
+          <div class="message-list-wrap"><button id="new-message-pill" type="button" class="new-pill hidden" aria-live="polite"></button><div id="message-list" class="message-list" role="listbox" aria-multiselectable="true" aria-label="Messages" tabindex="0"></div></div>
+          <article id="message-detail" class="detail-panel empty" tabindex="-1" aria-live="polite"><div><h2>Pick a message</h2><p>Read the body, copy it for an agent, follow its thread, reply or acknowledge. <kbd>j</kbd> / <kbd>k</kbd> move, <kbd>Enter</kbd> opens, <kbd>x</kbd> selects, <kbd>y</kbd> copies the body.</p></div></article>
+        </div>
+      </section>
+
+      <section id="view-roadmap" class="view" role="tabpanel" aria-labelledby="nav-roadmap" hidden>
+        <header class="view-head">
+          <div class="view-head-row">
+            <div><p class="eyebrow">Delivery · board-maintained · derived views</p><h1>Roadmap <span id="roadmap-count" class="count">0</span> <span id="roadmap-project" class="tag"></span></h1></div>
+            <button id="new-roadmap" type="button" class="secondary">New item</button>
+          </div>
+          <div class="toolbar" aria-label="Roadmap controls">
+            <div class="seg" role="group" aria-label="Roadmap view"><button id="rmode-overview" type="button" aria-pressed="true">Overview</button><button id="rmode-tree" type="button" aria-pressed="false">Tree</button><button id="rmode-kanban" type="button" aria-pressed="false">Kanban</button><button id="rmode-timeline" type="button" aria-pressed="false">Progression</button></div>
+            <label>Status <select id="filter-rstatus"><option value="">all</option></select></label>
+            <label>Owner <select id="filter-rowner"><option value="">all</option></select></label>
+            <label>Kind <select id="filter-rkind"><option value="">all</option><option value="UNKNOWN" data-fixed="true">unset</option></select></label>
+            <label>Standby after <select id="standby-hours"><option value="24">24 h</option><option value="48" selected>48 h</option><option value="72">72 h</option><option value="168">7 d</option></select></label>
+            <label>Window <select id="roadmap-since"><option value="6">6 h</option><option value="24" selected>24 h</option><option value="72">72 h</option><option value="168">7 d</option><option value="720">30 d</option></select></label>
+            <label class="toggle"><input id="roadmap-show-closed" type="checkbox"> Show closed</label>
+            <label class="sr-only" for="roadmap-search">Search roadmap</label>
+            <input id="roadmap-search" type="search" placeholder="Search id, title, owner…" autocomplete="off">
+          </div>
+        </header>
+        <p id="roadmap-tree-error" class="callout danger hidden" role="alert"></p>
+        <div id="roadmap-warnings" class="callout warn hidden" role="status"></div>
+        <div id="overview" class="overview hidden"></div>
+        <section class="panel moved-strip" aria-labelledby="moved-heading">
+          <div class="moved-strip-head"><h2 id="moved-heading"><span class="dot-moved" aria-hidden="true"></span>What moved <span id="moved-window">in the last 24 h</span> <span id="moved-count" class="count">0</span></h2><span class="quiet" id="moved-note"></span></div>
+          <div id="moved-list" class="moved-list"></div>
+        </section>
+        <div class="panel roadmap-layout" id="roadmap-layout">
+          <div id="roadmap-panel" class="roadmap-panel" role="listbox" aria-label="Roadmap items" tabindex="0"></div>
+          <aside id="roadmap-detail" class="detail-panel roadmap-detail empty" tabindex="-1"><div><h2>Pick a roadmap item</h2><p>Status, progress, what blocks it, what it waits on, what it unblocks, which milestone it feeds, and every recorded revision appear here.</p></div></aside>
+        </div>
+        <form id="roadmap-form" class="editor-panel hidden">
+          <div class="dialog-head"><h2 id="roadmap-form-title">Update roadmap item</h2><button id="cancel-roadmap" type="button" class="ghost">Close</button></div><input id="roadmap-revision" type="hidden" value="0">
+          <div class="form-grid"><label>Acting master<select id="roadmap-actor" required></select></label><label>Item ID<input id="roadmap-id" maxlength="128" required></label><label class="wide">Title<input id="roadmap-title" maxlength="200" required></label><label class="wide">Summary<textarea id="roadmap-summary" maxlength="2000" rows="4" required></textarea></label><label>Status<select id="roadmap-status" required></select></label><label>Owner<select id="roadmap-owner" required></select></label><label>Progress (0-100)<input id="roadmap-progress" type="number" min="0" max="100" value="0" required></label><label>Kind<select id="roadmap-kind"><option value="">unset</option></select></label><label class="wide">Blocker (BLOCKED only)<textarea id="roadmap-blocker" maxlength="2000" rows="2"></textarea></label><label class="wide">Depends on <small>item ids, comma or space separated · replaces the list</small><input id="roadmap-depends" maxlength="4000" placeholder="e.g. A2_G1_DVT_V2_INDEPENDENT_RESOLUTION, A2_G2_FER_V1"></label><label class="wide">Impact <small>one line: what it changes for the programme</small><input id="roadmap-impact" maxlength="300"></label><label class="wide">Standby reason <small>IN_PROGRESS only · empty = not paused</small><input id="roadmap-standby" maxlength="300"></label></div>
+          <p class="quiet">Parent links, extra blockers, gates and due dates are set from the CLI: <code>agent_board.py roadmap annotate</code>.</p>
+          <div class="form-actions"><button type="submit" class="primary">Save item</button></div><p id="roadmap-error" class="error" role="alert"></p>
+        </form>
+      </section>
+
+      <section id="view-tickets" class="view" role="tabpanel" aria-labelledby="nav-tickets" hidden>
+        <header class="view-head">
+          <div class="view-head-row">
+            <div><p class="eyebrow">Stage lifecycle · leases · reviewed completion</p><h1>Tickets <span id="ticket-count" class="count">0</span></h1></div>
+            <button id="new-ticket" type="button" class="secondary">New ticket</button>
+          </div>
+          <div class="toolbar" aria-label="Ticket controls">
+            <label>Assignee <select id="filter-tassignee"><option value="">all</option></select></label>
+            <label class="toggle"><input id="ticket-show-closed" type="checkbox"> Show DONE/CANCELLED</label>
+            <label class="sr-only" for="ticket-search">Search tickets</label>
+            <input id="ticket-search" type="search" placeholder="Search id, title, assignee…" autocomplete="off">
+          </div>
+        </header>
+        <div class="panel roadmap-layout" id="ticket-layout">
+          <div id="ticket-panel" class="roadmap-panel" role="listbox" aria-label="Tickets" tabindex="0"></div>
+          <aside id="ticket-detail" class="detail-panel roadmap-detail empty" tabindex="-1"><div><h2>Pick a ticket</h2><p>Stage, assignee and lease, dependencies, reviews, work log and comments appear here, with actions to move it forward.</p></div></aside>
+        </div>
+        <form id="ticket-form" class="editor-panel hidden">
+          <div class="dialog-head"><h2>New ticket</h2><button id="cancel-ticket" type="button" class="ghost">Close</button></div>
+          <div class="form-grid"><label>Acting master<select id="ticket-actor" required></select></label><label>Ticket ID<input id="ticket-id" maxlength="128" required></label><label class="wide">Title<input id="ticket-title" maxlength="300" required></label><label>Kind<select id="ticket-kind" required></select></label><label>Parent ticket <small>optional</small><input id="ticket-parent" maxlength="128"></label><label class="wide">Summary<textarea id="ticket-summary" maxlength="300" rows="2"></textarea></label><label class="wide">Body<textarea id="ticket-body" maxlength="32768" rows="6"></textarea></label><label>Assignee <small>optional</small><input id="ticket-assignee" maxlength="128"></label><label>Reviewer <small>defaults to the assignee's master</small><input id="ticket-reviewer" maxlength="128"></label></div>
+          <div class="form-actions"><button type="submit" class="primary">Create ticket</button></div><p id="ticket-form-error" class="error" role="alert"></p>
+        </form>
+      </section>
+
+      <section id="view-presence" class="view" role="tabpanel" aria-labelledby="nav-presence" hidden>
+        <header class="view-head"><div class="view-head-row"><div><p class="eyebrow">Who is doing what</p><h1>Masters &amp; leases <span id="presence-summary" class="count"></span></h1></div><div id="presence-strip" class="presence-strip" aria-label="Master presence"></div></div></header>
+        <div class="panel presence-grid"><div><h2 class="label">Master status</h2><div id="statuses" class="stack"></div></div><div><h2 class="label">Active leases</h2><div id="leases" class="stack"></div></div></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="compose-dialog" aria-labelledby="compose-heading"><form id="compose-form" method="dialog">
+    <div class="dialog-head"><div><p class="eyebrow">New coordination event</p><h2 id="compose-heading">Compose message</h2></div><button id="close-compose" type="button" class="ghost">Close</button></div><input id="reply-to" type="hidden">
+    <p id="compose-reply-note" class="quiet hidden"></p>
+    <div class="form-grid"><label>From<select id="compose-actor" required></select></label><label>To<select id="compose-to" required><option value="BOTH">Both masters</option></select></label><label>Kind<select id="compose-kind" required></select></label><label>Priority<select id="compose-priority" required></select></label><label class="wide hidden" id="compose-project-field">Project<select id="compose-project"></select></label><label class="wide">Workstream<input id="compose-workstream" maxlength="128" required></label><label class="wide"><span class="field-label">Summary <small>one line · markdown · <span id="compose-summary-count" aria-live="polite">0 / 300</span></small></span><input id="compose-summary" maxlength="300" required aria-describedby="compose-summary-count"></label><label class="wide"><span class="field-label">Body <small>markdown</small></span><textarea id="compose-body" maxlength="32768" rows="9"></textarea></label><label class="check"><input id="compose-ack" type="checkbox"> Requires acknowledgement</label></div>
+    <div class="form-actions"><button type="submit" class="primary">Send message</button></div><p id="compose-result" role="status"></p>
+  </form></dialog>
+
+  <dialog id="shortcuts-dialog" aria-labelledby="shortcuts-heading"><div class="dialog-body">
+    <div class="dialog-head"><h2 id="shortcuts-heading">Keyboard shortcuts</h2><button id="close-shortcuts" type="button" class="ghost">Close</button></div>
+    <div class="shortcuts"><kbd>1</kbd><span>Inbox</span><kbd>2</kbd><span>Roadmap</span><kbd>3</kbd><span>Tickets</span><kbd>4</kbd><span>Masters &amp; leases</span><kbd>/</kbd><span>Focus search</span><kbd>j</kbd><span>Next item in the list</span><kbd>k</kbd><span>Previous item</span><kbd>Enter</kbd><span>Open the focused item</span><kbd>x</kbd><span>Select / unselect the focused message (Shift-click selects a range)</span><kbd>y</kbd><span>Copy the open message as Markdown (or every selected one)</span><kbd>c</kbd><span>Compose a message</span><kbd>a</kbd><span>Acknowledge the open message (if you are its recipient)</span><kbd>t</kbd><span>Toggle light / dark theme</span><kbd>Esc</kbd><span>Clear the selection, close dialogs</span><kbd>?</kbd><span>This help</span></div>
+    <div class="form-actions"><button id="open-messages-folder" type="button" class="ghost">Open messages folder in Explorer</button></div><p id="open-messages-folder-result" class="quiet" role="status"></p>
+  </div></dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/markdown.js?v=20260905r2"></script>
+  <script src="/copy.js?v=20260905r2"></script>
+  <script src="/selection.js?v=20260905r2"></script>
+  <script src="/app.js?v=20260905r2"></script>
+</body>
+</html>

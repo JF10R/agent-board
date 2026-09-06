@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-board"
+version = "1.0.0"
+description = "Git-local, file-backed coordination board for agent teams (messages, acks, roadmap, web dashboard)."
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+agent_board = ["web_static/*"]
