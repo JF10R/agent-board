@@ -41,7 +41,7 @@ STATIC_FILES = {
     "/styles.css": ("styles.css", "text/css; charset=utf-8"),
 }
 UI_FILES = ("index.html", *(name for name, _ in STATIC_FILES.values()))
-DATA_FILES = ("roadmap.v1.json", "roadmap-ext.v1.json", "tickets.v1.json", "actors.v1.json")
+DATA_FILES = ("roadmap.v1.json", "roadmap-ext.v1.json", "tickets.v1.json", "actors.v1.json", tickets.DISPLAY_IDS_FILE)
 DATA_DIRECTORIES = ("messages", "acks", "status", "ticket-events", "leases")
 
 
@@ -214,7 +214,7 @@ def send_messages(root: Path, payload: Mapping[str, Any]) -> tuple[int, dict[str
     value = _exact_object(
         dict(payload),
         {"actor", "to", "kind", "priority", "workstream", "summary", "body", "requires_ack"},
-        {"reply_to"},
+        {"reply_to", "ticket_id"},
     )
     actor = _string(value["actor"], "actor", 32)
     recipient = _string(value["to"], "to", 32)
@@ -234,6 +234,7 @@ def send_messages(root: Path, payload: Mapping[str, Any]) -> tuple[int, dict[str
         "body": _string(value["body"], "body", 32768, allow_empty=True),
         "requires_ack": _boolean(value["requires_ack"], "requires_ack"),
         "reply_to": reply_to,
+        "ticket_id": _optional_string(value.get("ticket_id"), "ticket_id", 128, allow_empty=False),
     }
     recipients = sorted(vocabulary["identities"]) if recipient == "BOTH" else [recipient]
     results = []
@@ -604,7 +605,7 @@ class AgentBoardHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"ok": True, "chain_ok": ok, "detail": detail})
             elif path.startswith("/api/tickets/"):
                 ticket_id = unquote(path.removeprefix("/api/tickets/"))
-                self._json(HTTPStatus.OK, {"ok": True, "ticket": tickets.get_ticket(project.board_root, ticket_id)})
+                self._json(HTTPStatus.OK, {"ok": True, "ticket": ticket_detail(project.board_root, ticket_id)})
             elif path == "/api/actors":
                 query = parse_qs(urlsplit(self.path).query)
                 self._json(HTTPStatus.OK, {"ok": True, "actors": tickets.list_actors(project.board_root, role=query.get("role", [None])[0])})
@@ -670,13 +671,13 @@ class AgentBoardHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"ok": True, "item": item})
             elif path == "/api/tickets":
                 value = _exact_object(
-                    payload, {"actor", "id", "title"},
-                    {"kind", "summary", "body", "parent", "acceptance_criteria", "assignee", "reviewer", "subagents"},
+                    payload, {"actor", "title"},
+                    {"id", "kind", "summary", "body", "parent", "acceptance_criteria", "assignee", "reviewer", "subagents"},
                 )
                 ticket = tickets.create_ticket(
                     project.board_root,
                     actor=_string(value["actor"], "actor", 128),
-                    ticket_id=_string(value["id"], "id", 128),
+                    ticket_id=_string(value["id"], "id", 128) if "id" in value else "ticket-" + secrets.token_hex(16),
                     title=_string(value["title"], "title", 300),
                     kind=_string(value["kind"], "kind", 32) if "kind" in value else "ENGINEERING",
                     summary=_string(value["summary"], "summary", 300, allow_empty=True) if "summary" in value else "",
@@ -749,6 +750,25 @@ def _string_list(value: Any, label: str, item_cap: int) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise board.BoardError(f"{label} must be a list of strings")
     return [_string(item, f"{label} entry", item_cap) for item in value]
+
+
+def ticket_detail(root: Path, ticket_id: str) -> dict[str, Any]:
+    ticket = tickets.get_ticket(root, ticket_id)
+    linked = []
+    malformed = 0
+    for path in (root / "messages").glob("*.md"):
+        try:
+            metadata = board._read_message_metadata(path)
+            board._validate_state_message(path, metadata)
+        except (board.BoardError, board._OversizedRuntimeFile, OSError, UnicodeError, ValueError, TypeError):
+            malformed += 1
+            continue
+        if metadata.get("ticket_id") == ticket_id:
+            linked.append(metadata)
+    linked.sort(key=lambda message: (board.datetime.fromisoformat(message["created_at"].replace("Z", "+00:00")), message["id"]), reverse=True)
+    ticket["linked_messages"] = linked
+    ticket["linked_messages_malformed"] = malformed
+    return ticket
 
 
 def ticket_action(root: Path, ticket_id: str, action: str, payload: Mapping[str, Any]) -> dict[str, Any]:

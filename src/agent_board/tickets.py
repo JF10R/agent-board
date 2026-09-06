@@ -28,6 +28,75 @@ ACTOR_REGISTRY_SCHEMA_VERSION = 1
 ACTORS_FILE = "actors.v1.json"
 TICKETS_FILE = "tickets.v1.json"
 
+DISPLAY_IDS_FILE = "ticket-display-ids.v1.json"
+
+
+def _display_prefix(root: Path) -> str:
+    # The store sits in the common git directory, even for linked worktrees.
+    common = root.resolve().parent
+    name = common.parent.name if common.name == ".git" else root.name
+    return re.sub(r"[^A-Z0-9]+", "-", name.upper()).strip("-") or "PROJECT"
+
+
+def _read_display_ids(root: Path) -> dict[str, Any]:
+    try:
+        registry = board.json.loads((root / DISPLAY_IDS_FILE).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"schema_version": 1, "prefix": _display_prefix(root), "next_number": 1, "ids": {}}
+    except (ValueError, OSError) as exc:
+        raise board.BoardError(f"unreadable ticket display IDs: {exc}") from exc
+    if not isinstance(registry, dict) or registry.get("schema_version") != 1:
+        raise board.BoardError("invalid ticket display ID registry")
+    prefix, counter, ids = registry.get("prefix"), registry.get("next_number"), registry.get("ids")
+    if not isinstance(prefix, str) or not re.fullmatch(r"[A-Z0-9]+(?:-[A-Z0-9]+)*", prefix):
+        raise board.BoardError("invalid ticket display ID prefix")
+    if type(counter) is not int or counter < 1 or not isinstance(ids, dict):
+        raise board.BoardError("invalid ticket display ID allocation")
+    numbers = []
+    for ticket_id, display_id in ids.items():
+        board._require_safe_token("ticket id", ticket_id)
+        match = re.fullmatch(re.escape(prefix) + r"-([1-9][0-9]*)", display_id) if isinstance(display_id, str) else None
+        if not match or int(match[1]) < 1 or display_id != f"{prefix}-{int(match[1])}":
+            raise board.BoardError("invalid ticket display ID")
+        numbers.append(int(match[1]))
+    if len(set(numbers)) != len(numbers) or (numbers and counter <= max(numbers)):
+        raise board.BoardError("duplicate or reused ticket display ID")
+    return registry
+
+
+def _allocate_display_id(registry: dict[str, Any], ticket_id: str) -> str:
+    if ticket_id not in registry["ids"]:
+        registry["ids"][ticket_id] = f"{registry['prefix']}-{registry['next_number']}"
+        registry["next_number"] += 1
+    return registry["ids"][ticket_id]
+
+
+def migrate_ticket_display_ids(root: Path, *, prefix: str | None = None) -> dict[str, str]:
+    """Explicit, idempotent backfill; preserves event bytes, revisions and raw IDs.
+
+    This sidecar is authoritative identity metadata, not a rebuildable cache.
+    Keep it when archiving/deleting tickets or restoring the event store.
+    """
+    with _ticket_lock(root):
+        registry = _read_display_ids(root)
+        if prefix is not None:
+            if not re.fullmatch(r"[A-Z0-9]+(?:-[A-Z0-9]+)*", prefix):
+                raise board.BoardError("invalid ticket display ID prefix")
+            if (root / DISPLAY_IDS_FILE).exists() and registry["prefix"] != prefix:
+                raise board.BoardError("ticket display ID prefix is already frozen")
+            registry["prefix"] = prefix
+        # Order only determines the initial allocation; existing mappings never move.
+        existing = []
+        for path in _events_dir(root).glob("*.jsonl"):
+            events = _read_ticket_events(root, path.stem)
+            if events and events[0].get("type") == EV_CREATE:
+                existing.append((events[0].get("ts", ""), path.stem))
+        for _, ticket_id in sorted(existing):
+            _allocate_display_id(registry, ticket_id)
+        board._write_atomic_replace(root / DISPLAY_IDS_FILE, board._canonical_json(registry))
+        return dict(registry["ids"])
+
+
 STAGES = (
     "BACKLOG",
     "ANALYSIS",
@@ -445,6 +514,8 @@ def derive_ticket(root: Path, ticket_id: str) -> dict[str, Any]:
     for event in events:
         _apply_event(state, event)
 
+    state["display_id"] = _read_display_ids(root)["ids"].get(ticket_id)
+
     now = _utc_now()
     now_epoch = _ts_to_epoch(now)
     time_in = dict(state.get("time_in_stage") or {})
@@ -661,6 +732,10 @@ def create_ticket(
             raise board.BoardError(f"ticket already exists: {ticket_id}")
         if parent_id is not None and not _require_existing(root, parent_id):
             raise board.BoardError(f"unknown parent ticket: {parent_id}")
+        registry = _read_display_ids(root)
+        _allocate_display_id(registry, ticket_id)
+        # Reserve before appending: a crash may leave a gap but never reuse an ID.
+        board._write_atomic_replace(root / DISPLAY_IDS_FILE, board._canonical_json(registry))
         _append_ticket_event(
             root,
             ticket_id,

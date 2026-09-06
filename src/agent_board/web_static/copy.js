@@ -3,7 +3,7 @@
 // Agent Board — clipboard formats for agents (pure; node-tested by tools/test_agent_board_web_copy.py).
 // One message or N messages become Markdown an agent can paste: heading, provenance line, body.
 
-const COPY_ACTOR_LABELS = {"sol-master":"Sol Master","claude-master":"Claude Master",lead:"Lead",operator:"Operator"};
+const COPY_ACTOR_LABELS = {"sol-master":"Astra Master","claude-master":"Claude Master",lead:"Lead",operator:"Operator"};
 
 function copyActor(id) {
   const label = COPY_ACTOR_LABELS[id];

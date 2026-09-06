@@ -563,7 +563,7 @@ def _new_message_id() -> str:
 
 def _message_markdown(metadata: Mapping[str, Any], body: str) -> str:
     lines = ["---"]
-    for field in MESSAGE_FIELDS:
+    for field in (*MESSAGE_FIELDS, *(key for key in ("ticket_id",) if key in metadata)):
         lines.append(
             f"{field}: {json.dumps(metadata[field], ensure_ascii=False, separators=(',', ':'))}"
         )
@@ -583,7 +583,7 @@ def _parse_message_metadata_lines(lines: Sequence[str]) -> tuple[dict[str, Any],
         key, separator, raw_value = line.partition(": ")
         if not separator:
             raise BoardError(f"invalid metadata line: {line!r}")
-        if key not in MESSAGE_FIELDS:
+        if key not in (*MESSAGE_FIELDS, "ticket_id"):
             raise BoardError(f"unknown message metadata field: {key}")
         if key in metadata:
             raise BoardError(f"duplicate message metadata field: {key}")
@@ -660,6 +660,9 @@ def _validate_state_message(path: Path, metadata: Mapping[str, Any]) -> datetime
         raise BoardError("message kind or priority is invalid")
     if not isinstance(metadata.get("requires_ack"), bool):
         raise BoardError("message requires_ack must be boolean")
+    ticket_id = metadata.get("ticket_id")
+    if ticket_id is not None:
+        _require_safe_token("ticket_id", ticket_id)
     reply_to = metadata.get("reply_to")
     if reply_to is not None:
         if not isinstance(reply_to, str):
@@ -797,6 +800,7 @@ def post_message(
     summary: str,
     body: str = "",
     reply_to: str | None = None,
+    ticket_id: str | None = None,
     requires_ack: bool = False,
     message_id: str | None = None,
     created_at: str | None = None,
@@ -816,6 +820,10 @@ def post_message(
         _require_safe_token("reply_to", reply_to)
         if not _message_path(root, reply_to).is_file():
             raise BoardError(f"reply target does not exist: {reply_to}")
+    if ticket_id is not None:
+        from agent_board import tickets
+        ticket_id = _require_safe_token("ticket_id", ticket_id)
+        tickets.get_ticket(root, ticket_id)
     resolved_id = _require_safe_token("message id", message_id or _new_message_id())
     metadata: dict[str, Any] = {
         "id": resolved_id,
@@ -829,6 +837,8 @@ def post_message(
         "created_at": created_at or utc_now(),
         "summary": summary,
     }
+    if ticket_id is not None:
+        metadata["ticket_id"] = ticket_id
     try:
         _write_exclusive(_message_path(root, resolved_id), _message_markdown(metadata, body))
     except FileExistsError as exc:
@@ -1259,6 +1269,7 @@ def build_parser(config: Mapping[str, Any] | None = None) -> argparse.ArgumentPa
     body_group.add_argument("--body")
     body_group.add_argument("--body-file", type=Path)
     post.add_argument("--reply-to")
+    post.add_argument("--ticket-id", help="existing ticket in this project")
     post.add_argument("--requires-ack", action="store_true")
 
     inbox_parser = subparsers.add_parser("inbox", help="list messages addressed to one participant")
@@ -1719,6 +1730,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 summary=args.summary,
                 body=_read_body(args),
                 reply_to=args.reply_to,
+                ticket_id=args.ticket_id,
                 requires_ack=args.requires_ack,
             )
         )

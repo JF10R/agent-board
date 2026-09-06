@@ -60,6 +60,37 @@ class TicketWebApiTest(unittest.TestCase):
         status, value = self.request("GET", "/api/tickets")
         self.assertEqual([item["id"] for item in value["tickets"]], ["T1"])  # type: ignore[index]
 
+    def test_create_without_manual_id_returns_stable_display_id(self) -> None:
+        status, value = self.request("POST", "/api/tickets", {
+            "actor": "sol-master", "title": "Friendly ticket creation",
+        })
+        self.assertEqual(status, 201, value)
+        ticket = value["ticket"]
+        self.assertTrue(ticket["id"])
+        self.assertRegex(ticket["display_id"], r"^[A-Z0-9]+-1$")
+        status, fetched = self.request("GET", "/api/tickets/" + ticket["id"])
+        self.assertEqual(status, 200)
+        self.assertEqual(fetched["ticket"]["display_id"], ticket["display_id"])
+
+    def test_ticket_detail_links_explicit_inbox_message(self) -> None:
+        self.create_ticket()
+        status, posted = self.request("POST", "/api/messages", {
+            "actor": "sol-master", "to": "claude-master", "kind": "STATUS",
+            "priority": "NORMAL", "workstream": "board", "summary": "Linked handoff",
+            "body": "Developer evidence is ready.", "requires_ack": False, "ticket_id": "T1",
+        })
+        self.assertEqual(status, 201, posted)
+        status, fetched = self.request("GET", "/api/tickets/T1")
+        self.assertEqual(status, 200)
+        linked = fetched["ticket"]["linked_messages"]
+        self.assertEqual(len(linked), 1)
+        self.assertEqual(linked[0]["ticket_id"], "T1")
+        self.assertEqual(linked[0]["summary"], "Linked handoff")
+        self.assertEqual(fetched["ticket"]["linked_messages_malformed"], 0)
+        status, message = self.request("GET", "/api/messages/" + linked[0]["id"])
+        self.assertEqual(status, 200)
+        self.assertEqual(message["message"]["ticket_id"], "T1")
+
     def test_assign_review_and_done_flow(self) -> None:
         self.create_ticket()
         status, value = self.request("POST", "/api/tickets/T1/assign", {"actor": "sol-master", "assignee": "sol-master/worker"})
@@ -70,6 +101,18 @@ class TicketWebApiTest(unittest.TestCase):
         status, value = self.request("POST", "/api/tickets/T1/done", {"actor": "sol-master"})
         self.assertEqual(status, 200, value)
         self.assertEqual(value["ticket"]["stage"], "DONE")  # type: ignore[index]
+
+    def test_comment_preserves_multiline_body_and_actor(self) -> None:
+        self.create_ticket()
+        body = "Review question\n\n" + "Evidence details. " * 30
+        status, value = self.request("POST", "/api/tickets/T1/comment", {
+            "actor": "sol-master", "summary": "Review question", "body": body,
+        })
+        self.assertEqual(status, 200, value)
+        comment = value["ticket"]["comments"][-1]
+        self.assertEqual(comment["body"], body)
+        self.assertEqual(comment["summary"], "Review question")
+        self.assertEqual(comment["actor"], "sol-master")
 
     def test_revision_conflict_reports_409(self) -> None:
         created = self.create_ticket()

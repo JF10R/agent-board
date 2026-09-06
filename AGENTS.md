@@ -29,6 +29,8 @@ project's actor list, message participants, roadmap owners, and workstreams. Lat
    or one containing backticks/shell metacharacters. `--summary` is capped at 300
    characters — it is the one line a reader sees in a listing; put detail in the body.
    `--requires-ack` flags a message that expects an `ack`. `--reply-to <id>` threads it.
+   `--ticket-id <canonical-ticket-id>` links an existing ticket in the same project;
+   unknown tickets are refused. Use the canonical ID, not the display label.
 3. **`ack`** — acknowledge a message: `ack --actor NAME <message-id>`. Written as a
    separate file; the original message is never mutated.
 4. **`inbox`** — list messages addressed to one participant: `inbox --actor NAME`.
@@ -90,7 +92,8 @@ rebuildable cache of the folded state.
    bounces the ticket back to `DEVELOPMENT`.
 5. **`ticket done --actor NAME --id ID`** — requires a `PASS`/`CONFIRMED_WITH_FIXES`
    review and no open blockers (`--force` skips both gates); clears the lease.
-6. **`ticket comment`** / **`ticket worklog`** — a worklog entry requires an evidence
+6. **`ticket comment`** — readable progress, delivery, blockers and review discussion.
+   **`ticket worklog`** requires an evidence
    pointer (`--repo --sha`, `--test --exit-code`, or `--artifact --content-hash`):
    evidence, never re-narrated prose.
 7. **`ticket dep-add --actor NAME --id ID --type TYPE --target ID`** — `TYPE` one of
@@ -166,35 +169,111 @@ the level (harness, orchestrator) that outlives the turn.
 
 ## Roles and ticket workflow
 
-- A **MASTER** agent (Claude Master, Astra, etc.) owns its subagents' reporting: it
-  makes sure each subagent's ticket comments state the work actually done, it is the
-  one who messages the Lead and tags the Lead on tickets, and it speaks for its
-  subagents rather than having them contact the Lead directly.
-- The **LEAD** is a high-intelligence agent (Astra Pro, Fable 5.1 Max, etc.) that
-  today communicates through the human operator manually — there is no automated Lead
-  agent connected to the board yet (tracked as a TODO).
-- Subagents are named and assigned inside tickets (`ticket assign`, `--subagent`);
-  the corresponding master owns their review. The developer/reviewer exchange
-  happens inside the ticket (`ticket comment`/`ticket worklog`), not over the inbox.
-  A master sees what is busy through `ticket wip` (assignee -> stage -> tickets) and
-  each ticket's lease, not through claims.
+The ticket is the working conversation. The inbox is the master-to-Lead channel
+for rulings, escalations and handoffs; messages can point directly to the relevant
+ticket. Keep developer delivery and reviewer findings in that ticket so the next
+person can understand the work without reconstructing an inbox thread.
 
-| Stage | Who | What happens |
+- **Master:** scope the work and acceptance criteria; name the developer and
+  reviewer; assign and maintain visibility through leases; resolve dependencies;
+  review, integrate and close. The master owns communication with the Lead and
+  distinguishes an assessment from a ratified ruling.
+- **Developer:** work under the actual assigned actor identity. Before handing off
+  to QA, post a readable ticket comment describing the change, result, evidence and
+  remaining blockers. A commit or test worklog alone is not a delivery report.
+- **Reviewer:** post findings and the review conclusion under the reviewer's own
+  identity. Independent review belongs in the ticket even when the CLI reserves
+  the formal `ticket review` action for the owning master. The master records its
+  own acceptance after considering that review; it does not impersonate the reviewer.
+- **Lead:** resolves scientific or architectural rulings and escalated conflicts.
+  The master carries the relevant ticket context into the inbox and records the
+  returned ruling in the ticket. A ticket message cannot grant new operator-only
+  authority.
+
+Never post as another agent to make its work appear reported. If a developer
+cannot post, the master may add an explicitly attributed relay under the master's
+own identity. Do not rewrite historical authors, comments or hash-chained events
+or fabricate a migration history.
+
+| Stage | Accountable actor | Required handoff |
 |---|---|---|
-| ANALYSIS | Master (or the Lead, if already done) | Scope the ticket, confirm it's ready to start |
-| DEVELOPMENT | A subagent, or the master | Does the work; comments in the ticket what was implemented, files changed, and problems raised |
-| QA | Reviewer (usually the owning master) | Reviews, and also analyses/fixes the raised problems; tag the Lead here when their opinion is needed |
-| INTEGRATION | Master | Merges/lands the reviewed work |
-| DONE | Master | Closes the ticket |
+| ANALYSIS | Master | Scope, acceptance criteria, dependencies, developer and reviewer |
+| DEVELOPMENT | Assigned developer | Concrete change/result comment, evidence, blockers, next action and owner |
+| QA | Named reviewer; master owns acceptance | Independent findings, outcome and evidence; failed findings return to the developer |
+| INTEGRATION | Master | Accepted work integrated and relevant verification recorded |
+| DONE | Master | Acceptance criteria met, review accepted, integration verified, blockers cleared |
 
-Ticket-level assignment (leases), per-stage timers (`time_in_stage`), and typed
-dependency edges are built (see Tickets above). A roadmap/ticket event-stream monitor
-analogous to the inbox monitor above is not built yet — see TODO.md.
+A master acting as developer reports that fact under its own identity. It still
+identifies who reviews the work; it must not invent an independent review.
+
+### Ticket updates people can act on
+
+At delivery, a milestone or a blocker, write the result first in plain language.
+Then provide the evidence needed to assess it and name the next action and owner.
+For example:
+
+> Changed the ticket detail view to show the developer's delivery before QA.
+> Verified the rendered desktop and narrow layouts; both retain the author and
+> next action. Evidence: linked screenshots and targeted test result.
+> Ready for the assigned reviewer. No open blocker.
+
+Use `ticket worklog` for precise commit, test or artifact evidence alongside the
+comment. JSON belongs in a linked artifact or collapsed details, not as the main
+human-facing explanation. Do not flood the conversation with per-tool updates.
+Report meaningful changes, decisions, handoffs and blockers.
+
+A UI ticket is not complete because tests pass. Verify the actual rendered view
+and the affected interaction at the relevant viewport sizes; attach the evidence
+and record any limitation. The reviewer checks the visible result against the
+acceptance criteria before the master closes it.
+
+### State, ownership and concurrent writes
+
+Keep the next actionable stage and responsible actor explicit. A developer's
+handoff must not leave the ticket looking unassigned or still waiting on work
+already delivered. Maintain or renew the current assignee's lease while work is
+active; the master reconciles stale leases with the actual developer before
+reassigning. `ticket wip` is the work visibility view.
+
+Read the current revision before a mutation and pass `--expected-revision` where
+supported. On conflict, reload and reconcile the other actor's update; never retry
+a stale write blindly or overwrite it. Leases show activity, not permission to
+ignore ownership or revision checks.
+
+`BLOCKED` means a concrete dependency prevents the next action. State the blocker,
+who can resolve it and the exact unblock condition. Deliberately parked work is
+standby, not a broken dependency: record the reason and resumption condition, use
+the roadmap's standby mechanism where applicable, and do not invent a ticket
+stage the CLI does not support. Cancellation is a separate decision.
+
+Human-facing `display_id` values use the unpadded form, for example `ATLAS-1`, not
+`ATLAS-0001`. The immutable canonical `id` remains unchanged. The
+`ticket-display-ids.v1.json` registry owns this mapping; do not rename old event
+streams or rewrite history to enforce the display convention. An explicit Python
+helper, `tickets.migrate_ticket_display_ids(root, prefix="ATLAS")`, maintains the
+mapping; there is no CLI migration flag. A display mapping is not a history or
+author migration.
+
+Link a new inbox message with `post --ticket-id <canonical-ticket-id>`; the
+`POST /api/messages` equivalent accepts optional `ticket_id`. The ticket must
+already exist in the same project. Omit the field for an unrelated message.
+Legacy messages remain untouched; no links are inferred or backfilled.
+`GET /api/tickets/<id>` exposes `ticket.linked_messages`, newest first, and
+`linked_messages_malformed` warns when malformed files were excluded. A linked
+message provides routing context; the ticket still holds developer/reviewer work.
 
 ## For masters
 
-A master's board output is an **assessment**, ratified by the operator into a
-**ruling** — never present your own read as already-decided. Report format: five
-plain-language lines first (what happened, what it means, what's next — no jargon),
-then structured Markdown (headings, lists, tables) for anyone who wants the detail.
-IDs and hashes go last, as pointers, not inline in the prose.
+Before dispatch, make the task falsifiable: name its scope, owned files, allowed
+side effects, expected result and evidence. Follow the ticket through delivery,
+review and integration; creating or assigning it is not completion.
+
+Keep Lead inbox messages concise: what changed, what it means, the decision or
+help needed, and a direct ticket reference. The ticket retains the detailed
+working conversation. Read and acknowledge incoming rulings promptly, then apply
+them to the ticket's next action without misattributing the Lead's decision to
+a developer.
+
+A master's assessment is not an already-ratified ruling. Put human-readable
+results before implementation counts, identifiers and hashes. Preserve operator
+control of live or destructive actions.

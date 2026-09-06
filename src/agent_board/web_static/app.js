@@ -9,7 +9,7 @@ const token = document.querySelector('meta[name="agent-board-token"]').content;
 const $ = id => document.getElementById(id);
 const emptyTree = {items:[],roots:[],moved:[],counts:{},warnings:[],views:null};
 const emptyState = {messages:[],messages_meta:{total:0,returned:0,has_more:false,malformed:0,oversized:0},status:[],roadmap:[],roadmap_tree:emptyTree,ack_backlog:{},tickets:[],leases:[],actors:[],choices:{identities:[],message_senders:[],message_recipients:[],message_actors:[],kinds:[],priorities:[],roadmap_statuses:[],roadmap_owners:[],roadmap_kinds:[],ticket_stages:[],ticket_kinds:[],ticket_dep_types:[],ticket_review_verdicts:[]}};
-const actorLabels = {"sol-master":"Sol Master","claude-master":"Claude Master",lead:"Lead",operator:"Operator (you)",BOTH:"Both masters",shared:"Shared",unassigned:"Unassigned"};
+const actorLabels = {"sol-master":"Astra Master","claude-master":"Claude Master",lead:"Lead",operator:"Operator (you)",BOTH:"Both masters",shared:"Shared",unassigned:"Unassigned"};
 const absoluteET = new Intl.DateTimeFormat("en-CA", {timeZone:"America/Toronto", month:"short", day:"numeric", year:"numeric", hour:"numeric", minute:"2-digit", second:"2-digit", timeZoneName:"short"});
 const shortET = new Intl.DateTimeFormat("en-CA", {timeZone:"America/Toronto", hour:"numeric", minute:"2-digit", timeZoneName:"short"});
 const compactET = new Intl.DateTimeFormat("en-CA", {timeZone:"America/Toronto", month:"short", day:"numeric", hour:"numeric", minute:"2-digit"});
@@ -84,7 +84,7 @@ function renderProjectSwitcher() {
   $("compose-project-field").classList.toggle("hidden", !multiProject());
 }
 
-function setProject(name) {
+function setProject(name, syncTicketRoute = true) {
   activeProject = name;
   store(STORAGE.project, name);
   refreshGeneration += 1;
@@ -92,7 +92,9 @@ function setProject(name) {
   refreshInFlight = false;
   selectedIds = selectionClear(); selectionAnchor = null; selectedMessage = null; selectedMessageValue = null;
   dataVersion = null;
-  refresh();
+  selectedTicket = null; ticketDetailSignature = "";
+  if (syncTicketRoute && currentView === "tickets") history.replaceState(null, "", ticketUrl(null));
+  return refresh();
 }
 
 // ---------- utilities ----------
@@ -478,7 +480,7 @@ async function copySelectedBodies() {
 function messageDetailMarkup(value) {
   const item = value.message;
   return `<div class="detail-head"><div class="badges" id="detail-badges">${tagMarkup(item.kind, toneForKind(item.kind))}${tagMarkup(item.priority, toneForPriority(item.priority))}${ackMarkup({...item, acked: value.acked})}</div><h2>${renderInlineMarkdown(item.summary)}</h2><div class="detail-meta"><span>${actorMarkup(item.from)} → ${actorMarkup(item.to)}</span><span class="mono">${escapeText(item.workstream)}</span>${timeMarkup(item.created_at, false)}<span class="mono quiet">${escapeText(item.id)}</span></div></div>
-  <div class="detail-actions"><button id="copy-body" type="button" class="primary" title="Title, provenance and body as Markdown an agent can paste (y)">Copy body</button><button id="reply" type="button" class="secondary">Reply</button>${item.requires_ack ? '<button id="ack-message" type="button" class="danger-button"></button>' : ""}<button id="copy-id" type="button" class="ghost">Copy id</button></div>
+  <div class="detail-actions"><button id="copy-body" type="button" class="primary" title="Title, provenance and body as Markdown an agent can paste (y)">Copy body</button><button id="reply" type="button" class="secondary">Reply</button>${item.requires_ack ? '<button id="ack-message" type="button" class="danger-button"></button>' : ""}<button id="copy-id" type="button" class="ghost">Copy id</button>${item.ticket_id ? '<button id="message-open-ticket" type="button" class="secondary">Open ticket</button>' : ""}</div>
   <div class="message-body markdown-body">${renderMarkdown(value.body) || '<span class="muted">Empty body</span>'}</div>
   <div id="thread" class="thread"><h3 class="label">Thread</h3><div id="thread-items"><p class="quiet">Loading thread…</p></div></div>
   <details class="raw-details"><summary>Raw message</summary><div class="detail-actions"><button id="copy-whole" type="button" class="ghost">Copy raw</button></div><pre>${escapeText(value.raw)}</pre></details>`;
@@ -529,6 +531,7 @@ async function showMessage(id) {
     $("copy-id").onclick = () => copy(value.message.id, "Message id copied");
     $("copy-whole").onclick = () => copy(value.raw, "Raw message copied");
     $("reply").onclick = () => openCompose(value.message);
+    if ($("message-open-ticket")) $("message-open-ticket").onclick = async () => { const project = messageProject(value.message.id); if (project !== activeProjectName()) await setProject(project, false); setView("tickets"); selectTicket(value.message.ticket_id); };
     if ($("ack-message")) $("ack-message").onclick = acknowledgeSelected;
     revealOnMobile(detail);
   } catch (error) { if (selectedMessage !== id) return; detail.innerHTML = `<p class="error">${escapeText(error.message)}</p>`; }
@@ -949,6 +952,9 @@ function ticketStagePill(stage) { return `<span class="pill ${ticketStageTone(st
 let selectedTicket = null;
 let ticketDetailSignature = "";
 let ticketFormOpener = null;
+let ticketStageFilter = "all";
+const ticketDiscussions = new Map();
+const ticketDiscussionLoads = new Set();
 
 function ticketsById() { return new Map(state.tickets.map(item => [item.id, item])); }
 
@@ -957,7 +963,7 @@ function ticketMatches(item) {
   if (assignee && item.assignee !== assignee) return false;
   const query = $("ticket-search").value.trim().toLowerCase();
   if (!query) return true;
-  const haystack = `${item.id} ${item.title} ${item.assignee || ""} ${item.reviewer || ""}`.toLowerCase();
+  const haystack = `${item.id} ${item.display_id || ""} ${item.title} ${item.assignee || ""} ${ticketActorLabel(item.assignee)} ${item.reviewer || ""}`.toLowerCase();
   return query.split(/\s+/).every(part => haystack.includes(part));
 }
 
@@ -975,44 +981,80 @@ async function ticketAction(id, action, body) { return ticketApi(`/api/tickets/$
 function renderTicketKanban() {
   const panel = $("ticket-panel");
   const items = visibleTickets();
-  const showClosed = $("ticket-show-closed").checked;
-  const lanes = TICKET_LANES.filter(([key]) => showClosed || !TICKET_TERMINAL.has(key));
-  panel.innerHTML = '<div class="kanban"></div>';
-  const board = panel.firstElementChild;
-  for (const [key, title] of lanes) {
-    const laneItems = items.filter(item => item.stage === key).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-    const lane = document.createElement("section"); lane.className = "lane"; lane.setAttribute("aria-label", title);
-    lane.innerHTML = `<header>${ticketStagePill(key)}<span class="n">${laneItems.length}</span></header><div class="lane-cards"></div>`;
-    const cards = lane.querySelector(".lane-cards");
-    reconcileKeyed(cards, laneItems, () => {
-      const card = document.createElement("button"); card.type = "button"; card.className = "card"; card.setAttribute("role", "option");
-      card.innerHTML = '<span class="parent-tag"></span><strong></strong><span class="tree-signals"></span><span class="card-foot"><span class="owner"></span><time data-compact="true"></time></span>';
-      card.addEventListener("click", () => selectTicket(card.dataset.id));
-      return card;
-    }, (card, item) => {
-      card.classList.toggle("selected", selectedTicket === item.id);
-      card.setAttribute("aria-selected", String(selectedTicket === item.id));
-      card.querySelector(".parent-tag").textContent = item.parent_id ? `↳ ${item.parent_id}` : item.kind;
-      card.querySelector("strong").textContent = item.title;
-      const bits = [];
-      if (item.lease_stale) bits.push(tagMarkup("LEASE STALE", "red"));
-      if (item.stale) bits.push(tagMarkup("STALE", "amber"));
-      if ((item.deps || []).some(dep => dep.type === "BLOCKED_BY")) bits.push(tagMarkup("HAS DEPS"));
-      card.querySelector(".tree-signals").innerHTML = bits.join("");
-      card.querySelector(".owner").innerHTML = item.assignee ? actorMarkup(item.assignee) : '<span class="quiet">unassigned</span>';
-      applyTimestamp(card.querySelector("time"), item.updated_at, true);
-    });
-    if (!laneItems.length) cards.innerHTML = '<p class="lane-empty">Empty</p>';
-    board.append(lane);
-  }
+  const stages = TICKET_LANES.filter(([key]) => $("ticket-show-closed").checked || !TICKET_TERMINAL.has(key));
+  if (!stages.some(([key]) => key === ticketStageFilter)) ticketStageFilter = "all";
+  const shown = items.filter(item => ticketStageFilter === "all" || item.stage === ticketStageFilter).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  panel.innerHTML = `<div class="ticket-stage-filters" role="group" aria-label="Filter tickets by stage">${[["all", "All tickets"], ...stages].map(([key, label]) => `<button type="button" data-ticket-stage="${key}" aria-pressed="${ticketStageFilter === key}">${escapeText(label)}<span>${key === "all" ? items.length : items.filter(item => item.stage === key).length}</span></button>`).join("")}</div><div class="ticket-list-heading"><span>${shown.length} ticket${shown.length === 1 ? "" : "s"}</span><span>Last updated</span></div><div class="ticket-list" role="listbox" aria-label="Tickets"></div>`;
+  panel.querySelectorAll("[data-ticket-stage]").forEach(button => button.onclick = () => { ticketStageFilter = button.dataset.ticketStage; renderTicketKanban(); panel.querySelector(`[data-ticket-stage="${ticketStageFilter}"]`).focus(); });
+  const list = panel.querySelector(".ticket-list");
+  reconcileKeyed(list, shown, () => {
+    const row = document.createElement("button"); row.type = "button"; row.className = "ticket-row card"; row.setAttribute("role", "option");
+    row.innerHTML = '<span class="ticket-row-stage"></span><span class="ticket-row-name"><strong></strong><span class="ticket-row-meta"></span></span><span class="ticket-row-owner"></span><time data-compact="true"></time><span class="ticket-row-arrow" aria-hidden="true">›</span>';
+    row.onclick = () => selectTicket(row.dataset.id);
+    return row;
+  }, (row, item) => {
+    row.setAttribute("aria-selected", String(selectedTicket === item.id));
+    row.querySelector(".ticket-row-stage").innerHTML = ticketStagePill(item.stage);
+    row.querySelector("strong").textContent = item.title;
+    row.querySelector(".ticket-row-meta").innerHTML = `${escapeText(item.display_id || item.id)} · ${escapeText(item.kind)}${item.lease_stale ? ' · <span class="error">Lease expired</span>' : ""}${(item.deps || []).some(dep => dep.type === "BLOCKED_BY") ? ' · Dependencies' : ""}`;
+    row.querySelector(".ticket-row-owner").textContent = ticketActorLabel(item.assignee);
+    row.querySelector(".ticket-row-owner").title = item.assignee || "Unassigned";
+    applyTimestamp(row.querySelector("time"), item.updated_at, true);
+  });
+  if (!shown.length) list.innerHTML = '<div class="empty-list"><strong>No tickets in this view</strong><span>Choose another stage or adjust your filters.</span></div>';
 }
 
 function ticketDepsMarkup(deps, byId) {
   if (!deps.length) return '<p class="quiet">No dependencies.</p>';
   return `<ul class="list-plain">${deps.map(dep => {
     const target = byId.get(dep.target);
-    return `<li>${tagMarkup(dep.type)}${target ? `<button type="button" class="link-button" data-select-ticket="${escapeText(dep.target)}">${escapeText(target.title)}</button>` : `<span>${escapeText(dep.target)}</span>`}<small>${escapeText(dep.target)}${target ? ` · ${escapeText(target.stage)}` : ""}</small></li>`;
+    return `<li>${tagMarkup(dep.type)}${target ? `<button type="button" class="link-button" data-select-ticket="${escapeText(dep.target)}">${escapeText(target.title)}</button>` : `<span>${escapeText(dep.target)}</span>`}<small>${escapeText(target?.display_id || dep.target)}${target ? ` · ${escapeText(target.stage)}` : ""}</small></li>`;
   }).join("")}</ul>`;
+}
+
+function ticketActorLabel(id) {
+  if (!id) return "Unassigned";
+  const [master, ...worker] = id.split("/");
+  return worker.length ? `${actorLabels[master] || master} / ${worker.join("/").replaceAll("_", " ")}` : actorLabels[id] || id;
+}
+
+async function loadTicketDiscussion(id) {
+  const project = activeProjectName(); const key = `${project}/${id}`;
+  if (ticketDiscussionLoads.has(key)) return;
+  ticketDiscussionLoads.add(key);
+  try {
+    const value = await api(withProject(`/api/tickets/${encodeURIComponent(id)}`, project));
+    ticketDiscussions.set(key, {messages: value.ticket.linked_messages || [], malformed: value.ticket.linked_messages_malformed || 0});
+  } catch (error) { ticketDiscussions.set(key, {error: error.message}); }
+  finally {
+    ticketDiscussionLoads.delete(key);
+    if (selectedTicket === id && activeProjectName() === project) renderTicketDetail();
+  }
+}
+
+function ticketDiscussionMarkup(discussion) {
+  if (!discussion) return '<p class="quiet">Loading linked inbox discussion…</p>';
+  if (discussion.error) return '<p class="quiet">Linked inbox discussion is unavailable. Refresh to retry.</p>';
+  if (!discussion.messages.length && !discussion.malformed) return "";
+  return `<section class="ticket-inbox-discussion"><h3>Linked inbox discussion <span class="quiet">${discussion.messages.length}</span></h3>${discussion.malformed ? '<p class="quiet">Some message files could not be read; this list may be incomplete.</p>' : ""}${[...discussion.messages].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id)).map(message => `<button type="button" class="ticket-inbox-link" data-ticket-message="${escapeText(message.id)}"><strong>${escapeText(message.summary)}</strong><span>${escapeText(ticketActorLabel(message.from))} → ${escapeText(ticketActorLabel(message.to))} · ${timeMarkup(message.created_at, true)}</span><small>Open in Inbox ↗</small></button>`).join("")}</section>`;
+}
+
+function ticketAuthorMarkup(id) {
+  const registered = (state.actors || []).find(actor => actor.name === id);
+  const [prefix, ...worker] = id.split("/");
+  const isDeveloper = worker.length > 0 || registered?.role === "subagent";
+  const name = isDeveloper ? (worker.join("/") || id).replaceAll("_", " ") : ticketActorLabel(id);
+  const affiliation = isDeveloper ? `Developer · ${ticketActorLabel(registered?.master || prefix)}` : registered?.role === "operator" || id === "operator" ? "Operator" : registered?.role === "lead" || id === "lead" ? "Lead" : "Master";
+  return `<span class="ticket-author" title="${escapeText(id)}"><strong>${escapeText(name)}</strong><small>${escapeText(affiliation)}</small></span>`;
+}
+
+function ticketCommentMarkup(entry) {
+  const body = entry.body || entry.summary || "";
+  try {
+    const value = JSON.parse(body);
+    if (value !== null && typeof value === "object") return `${entry.body && entry.summary ? `<p>${escapeText(entry.summary)}</p>` : ""}<details class="ticket-technical"><summary>Technical evidence</summary><pre><code>${escapeText(JSON.stringify(value, null, 2))}</code></pre></details>`;
+  } catch { /* Ordinary prose and Markdown remain prose. */ }
+  return renderMarkdown(body);
 }
 
 function ticketActivityMarkup(item) {
@@ -1020,91 +1062,140 @@ function ticketActivityMarkup(item) {
     ...item.comments.map(entry => ({...entry, kind: "comment"})),
     ...item.worklog.map(entry => ({...entry, kind: "worklog"})),
     ...item.reviews.map(entry => ({...entry, kind: "review"})),
-  ].sort((a, b) => a.ts.localeCompare(b.ts)).reverse();
-  if (!entries.length) return "";
-  const rows = entries.map(entry => `<div class="history-entry"><span class="history-dot" aria-hidden="true"></span><div><strong>${escapeText(actorText(entry.actor))} · ${entry.kind}${entry.verdict ? ` · ${escapeText(entry.verdict)}` : ""}</strong>${timeMarkup(entry.ts, false)}${entry.summary ? `<div class="delta">${escapeText(entry.summary)}</div>` : ""}${entry.findings && entry.findings.length ? `<ul class="list-plain">${entry.findings.map(finding => `<li>${escapeText(finding)}</li>`).join("")}</ul>` : ""}${entry.evidence ? `<div class="delta">${Object.entries(entry.evidence).map(([key, value]) => `<span class="chg">${escapeText(key)}: ${escapeText(String(value))}</span>`).join("")}</div>` : ""}</div></div>`).join("");
-  return `<h3 class="label">Activity</h3><div class="history">${rows}</div>`;
+  ].sort((a, b) => b.ts.localeCompare(a.ts) || (b.seq || 0) - (a.seq || 0) || b.kind.localeCompare(a.kind) || b.actor.localeCompare(a.actor));
+  if (!entries.length) return '<p class="ticket-no-activity">No updates yet. Start the conversation below.</p>';
+  return `<div class="ticket-timeline">${entries.map(entry => `<article class="ticket-event"><span class="ticket-avatar" aria-hidden="true">${escapeText(ticketActorLabel(entry.actor).slice(0, 1))}</span><div class="ticket-event-content"><header>${ticketAuthorMarkup(entry.actor)}<span class="quiet">${entry.kind === "comment" ? "commented" : entry.kind === "review" ? "reviewed" : "logged work"}</span>${timeMarkup(entry.ts, true)}</header>${entry.verdict ? `<p>${tagMarkup(entry.verdict, entry.verdict === "FAIL" ? "red" : "green")}</p>` : ""}<div class="markdown-body">${ticketCommentMarkup(entry)}</div>${entry.findings?.length ? `<ul>${entry.findings.map(finding => `<li>${escapeText(finding)}</li>`).join("")}</ul>` : ""}${entry.evidence ? `<dl class="ticket-evidence">${Object.entries(entry.evidence).map(([key, value]) => `<dt>${escapeText(key)}</dt><dd>${escapeText(String(value))}</dd>`).join("")}</dl>` : ""}</div></article>`).join("")}</div>`;
 }
 
 function renderTicketDetail() {
   const detail = $("ticket-detail");
   const byId = ticketsById();
   const item = selectedTicket ? byId.get(selectedTicket) : null;
-  if (!item) {
-    if (!detail.classList.contains("empty")) {
-      detail.className = "detail-panel roadmap-detail empty";
-      detail.innerHTML = '<div><h2>Pick a ticket</h2><p>Stage, assignee and lease, dependencies, reviews, work log and comments appear here, with actions to move it forward.</p></div>';
-    }
-    return;
-  }
-  const signature = JSON.stringify(item);
+  $("ticket-panel").hidden = Boolean(item);
+  detail.hidden = !item;
+  if (!item) { detail.innerHTML = ""; detail.dataset.ticketId = ""; return; }
+  const discussion = ticketDiscussions.get(`${activeProjectName()}/${item.id}`);
+  const signature = JSON.stringify([item, discussion]);
   if (signature === ticketDetailSignature) return;
   ticketDetailSignature = signature;
-  detail.className = "detail-panel roadmap-detail";
-  const lease = item.lease;
+  const sameTicket = detail.dataset.ticketId === item.id;
+  const draft = sameTicket ? [...detail.querySelectorAll("input, select, textarea")].filter(node => node.id === "ta-actor" || node.value !== node.dataset.initialValue).map(node => [node.id, node.value]) : [];
+  const openDialog = sameTicket ? detail.querySelector("dialog[open]")?.id : null;
+  const focused = sameTicket && detail.contains(document.activeElement) ? document.activeElement : null;
+  const focusState = focused ? {id: focused.id, start: focused.selectionStart, end: focused.selectionEnd} : null;
+  const descriptionOpen = sameTicket ? detail.querySelector(".ticket-description")?.open : item.body.length < 1200;
+  detail.dataset.ticketId = item.id;
+  detail.className = "detail-panel ticket-issue";
   const identities = state.choices.identities || [];
-  const stageOptions = TICKET_LANES.filter(([key]) => key !== "DONE").map(([key, label]) => `<option value="${key}" ${key === item.stage ? "selected" : ""}>${escapeText(label)}</option>`).join("");
-  detail.innerHTML = `<div class="detail-head"><div class="badges">${ticketStagePill(item.stage)}${tagMarkup(item.kind)}${tagMarkup(`r${item.revision}`)}${item.stale ? tagMarkup("STALE", "amber") : ""}</div><h2>${escapeText(item.title)}</h2><div class="detail-meta"><span class="mono">${escapeText(item.id)}</span>${item.parent_id ? `<span>↳ <button type="button" class="link-button" data-select-ticket="${escapeText(item.parent_id)}">${escapeText(item.parent_id)}</button></span>` : ""}</div></div>
-  <div class="detail-actions"><button id="ticket-copy-id" type="button" class="ghost">Copy id</button><button id="ticket-copy-md" type="button" class="ghost">Copy as Markdown</button></div>
-  <dl class="kv"><dt class="label">Assignee</dt><dd>${item.assignee ? actorMarkup(item.assignee) : '<span class="quiet">unassigned</span>'}</dd><dt class="label">Reviewer</dt><dd>${item.reviewer ? actorMarkup(item.reviewer) : '<span class="quiet">none</span>'}</dd><dt class="label">Lease</dt><dd>${lease ? `${actorMarkup(lease.assignee)} · expires ${escapeText(relativeTime(lease.expires_at))}${item.lease_stale ? ` ${tagMarkup("STALE", "red")}` : ""}` : '<span class="quiet">none</span>'}</dd><dt class="label">Updated</dt><dd>${timeMarkup(item.updated_at, false)}</dd></dl>
-  ${item.summary ? `<h3 class="label">Summary</h3><div class="markdown-body">${renderMarkdown(item.summary)}</div>` : ""}
-  ${item.body ? `<h3 class="label">Body</h3><div class="markdown-body">${renderMarkdown(item.body)}</div>` : ""}
-  ${item.acceptance_criteria.length ? `<h3 class="label">Acceptance criteria</h3><ul class="list-plain">${item.acceptance_criteria.map(text => `<li>${escapeText(text)}</li>`).join("")}</ul>` : ""}
-  <h3 class="label">Dependencies</h3>${ticketDepsMarkup(item.deps, byId)}
-  <h3 class="label">Actions</h3>
-  <div class="editor-panel ticket-actions"><div class="form-grid">
-    <label>Acting master<select id="ta-actor">${identities.map(id => `<option value="${escapeText(id)}">${escapeText(actorLabels[id] || id)}</option>`).join("")}</select></label>
-    <label>Assign to<input id="ta-assignee" maxlength="128" placeholder="${escapeText(identities[0] || "master")}/worker"></label>
-    <button id="ta-assign" type="button" class="secondary">Assign + lease</button>
-    <button id="ta-heartbeat" type="button" class="ghost">Heartbeat my lease</button>
-    <label>Move to<select id="ta-stage">${stageOptions}</select></label>
-    <button id="ta-transition" type="button" class="secondary">Transition</button>
-    <label class="wide">Comment<input id="ta-comment" maxlength="300"></label>
-    <button id="ta-comment-btn" type="button" class="secondary">Add comment</button>
-    <label>Review verdict<select id="ta-verdict"><option value="PASS">PASS</option><option value="CONFIRMED_WITH_FIXES">CONFIRMED_WITH_FIXES</option><option value="FAIL">FAIL</option></select></label>
-    <label class="wide">Review summary<input id="ta-review-summary" maxlength="300"></label>
-    <label class="wide">Findings <small>one per line, required unless PASS</small><textarea id="ta-findings" rows="2"></textarea></label>
-    <button id="ta-review" type="button" class="secondary">Record review</button>
-    <button id="ta-done" type="button" class="primary">Mark DONE</button>
-  </div><p id="ta-error" class="error" role="alert"></p></div>
-  ${ticketActivityMarkup(item)}`;
-  detail.querySelectorAll("[data-select-ticket]").forEach(button => button.addEventListener("click", () => selectTicket(button.dataset.selectTicket)));
-  $("ticket-copy-id").onclick = () => copy(item.id, "Ticket id copied");
+  const lease = item.lease;
+  const options = TICKET_LANES.filter(([key]) => key !== "DONE").map(([key, title]) => `<option value="${key}" ${key === item.stage ? "selected" : ""}>${escapeText(title)}</option>`).join("");
+  detail.innerHTML = `<div class="ticket-breadcrumb"><button id="ticket-back" type="button" class="ghost">← Tickets</button><span>/</span><span class="ticket-project-name">${escapeText(activeProjectName() || "Project")}</span><span>/</span><button id="ticket-copy-id" type="button" class="ghost mono" title="Copy ticket ID">${escapeText(item.display_id || item.id)}</button><button id="ticket-copy-link" type="button" class="ghost">Copy link</button><button id="ticket-copy-md" type="button" class="ghost ticket-export">Copy Markdown</button></div>
+    <header class="ticket-issue-head"><div class="badges">${ticketStagePill(item.stage)}${tagMarkup(item.kind)}</div><h2>${escapeText(item.title)}</h2><div class="ticket-command-bar"><button id="ticket-reply" type="button" class="secondary">Comment</button><button id="ticket-review-open" type="button" class="secondary">Record review</button><button id="ta-done" type="button" class="ghost">✓ Mark done</button><label class="ticket-acting">Acting as <select id="ta-actor" aria-label="Acting master">${identities.map(id => `<option value="${escapeText(id)}">${escapeText(ticketActorLabel(id))}</option>`).join("")}</select></label></div></header>
+    <p id="ta-error" class="error" role="alert"></p>
+    <div class="ticket-issue-grid"><div class="ticket-main">
+      ${item.summary ? `<p class="ticket-summary">${escapeText(item.summary)}</p>` : ""}
+      ${item.body ? `<details class="ticket-description" ${descriptionOpen ? "open" : ""}><summary>Description <span class="quiet">${item.body.length >= 1200 ? "Full context" : ""}</span></summary><div class="markdown-body">${renderMarkdown(item.body)}</div></details>` : ""}
+      ${item.acceptance_criteria.length ? `<section class="ticket-criteria"><h3>Acceptance criteria</h3><ul>${item.acceptance_criteria.map(text => `<li>${escapeText(text)}</li>`).join("")}</ul></section>` : ""}
+      <section class="ticket-discussion" aria-labelledby="ticket-activity-title"><div class="ticket-discussion-head"><h3 id="ticket-activity-title">Activity</h3><span>${item.comments.length} comment${item.comments.length === 1 ? "" : "s"}</span></div>
+        <div class="ticket-composer"><label class="sr-only" for="ta-comment">Write a comment</label><textarea id="ta-comment" rows="4" maxlength="32768" placeholder="Write a comment, share an update, or ask a question…"></textarea><div class="ticket-composer-foot"><span class="quiet">Markdown supported</span><button id="ta-comment-btn" type="button" class="primary">Send comment</button></div><p id="ta-comment-error" class="error" role="alert"></p></div>${ticketActivityMarkup(item)}
+      </section>
+      ${ticketDiscussionMarkup(discussion)}
+    </div><aside class="ticket-properties" aria-label="Ticket properties"><h3>Properties</h3><dl>
+      <dt>Status</dt><dd><div class="ticket-status-control"><select id="ta-stage" aria-label="Move ticket to stage">${item.stage === "DONE" ? '<option value="" selected disabled>Done</option>' : ""}${options}</select><button id="ta-transition" type="button" class="ghost">Apply</button></div></dd>
+      <dt>Assignee</dt><dd><button id="ticket-assign-open" type="button" class="ticket-property-button" title="${escapeText(item.assignee || "Unassigned")}">${escapeText(ticketActorLabel(item.assignee))}<span aria-hidden="true">↗</span></button></dd>
+      <dt>Reviewer</dt><dd title="${escapeText(item.reviewer || "")}">${item.reviewer ? escapeText(ticketActorLabel(item.reviewer)) : '<span class="quiet">Not assigned</span>'}</dd>
+      <dt>Lease</dt><dd>${lease ? `<span>${item.lease_stale ? 'Expired' : `Expires ${escapeText(relativeTime(lease.expires_at))}`}</span>` : '<span class="quiet">No active lease</span>'}<button id="ta-heartbeat" type="button" class="link-button">Renew my lease</button></dd>
+      <dt>Updated</dt><dd>${timeMarkup(item.updated_at, true)}</dd></dl>
+      ${item.parent_id ? `<div class="ticket-property-section"><h3>Parent ticket</h3><button type="button" class="link-button" data-select-ticket="${escapeText(item.parent_id)}">${escapeText(byId.get(item.parent_id)?.title || item.parent_id)}</button></div>` : ""}
+      <div class="ticket-property-section"><h3>Dependencies</h3>${ticketDepsMarkup(item.deps, byId)}</div>
+    </aside></div>
+    <dialog id="ticket-assign-dialog" class="ticket-dialog" aria-labelledby="ticket-assign-title"><form id="ticket-assign-form"><div class="dialog-head"><h2 id="ticket-assign-title">Assign ticket</h2><button type="button" class="ghost" data-close-ticket-dialog>Close</button></div><p class="muted">Assign an owner and start their work lease.</p><div class="form-grid"><label class="wide">Assignee<input id="ta-assignee" maxlength="128" value="${escapeText(item.assignee || "")}" placeholder="${escapeText(identities[0] || "master")}/worker" required></label></div><p id="ta-assign-error" class="error" role="alert"></p><div class="form-actions"><button id="ta-assign" type="submit" class="primary">Assign & start lease</button></div></form></dialog>
+    <dialog id="ticket-review-dialog" class="ticket-dialog" aria-labelledby="ticket-review-title"><form id="ticket-review-form"><div class="dialog-head"><h2 id="ticket-review-title">Record a review</h2><button type="button" class="ghost" data-close-ticket-dialog>Close</button></div><p class="muted">A passing review is required before completion.</p><div class="form-grid"><label class="wide">Verdict<select id="ta-verdict"><option value="PASS">Pass</option><option value="CONFIRMED_WITH_FIXES">Confirmed with fixes</option><option value="FAIL">Changes requested</option></select></label><label class="wide">Review summary<input id="ta-review-summary" maxlength="300" required></label><label class="wide">Findings <small>One per line; required for fixes or changes requested</small><textarea id="ta-findings" rows="4"></textarea></label></div><p id="ta-review-error" class="error" role="alert"></p><div class="form-actions"><button id="ta-review" type="submit" class="primary">Save review</button></div></form></dialog>`;
+  $("ticket-back").onclick = () => { const previous = selectedTicket; selectedTicket = null; ticketDetailSignature = ""; history.pushState(null, "", ticketUrl(null)); renderTickets(); [...$("ticket-panel").querySelectorAll(".card")].find(card => card.dataset.id === previous)?.focus(); };
+  $("ticket-reply").onclick = () => { $("ta-comment").scrollIntoView({block: "center"}); $("ta-comment").focus({preventScroll: true}); };
+  for (const kind of ["assign", "review"]) {
+    const dialog = $(`ticket-${kind}-dialog`);
+    const opener = $(`ticket-${kind}-open`);
+    opener.onclick = () => dialog.showModal();
+    dialog.querySelector("[data-close-ticket-dialog]").onclick = () => dialog.close();
+    dialog.addEventListener("close", () => opener.focus({preventScroll: true}));
+  }
+  detail.querySelectorAll("input, select, textarea").forEach(node => { node.dataset.initialValue = node.value; });
+  for (const [id, value] of draft) if ($(id)) $(id).value = value;
+  if (openDialog) $(openDialog).showModal();
+  if (focusState && $(focusState.id)) {
+    const node = $(focusState.id); node.focus({preventScroll: true});
+    if (typeof focusState.start === "number") node.setSelectionRange(focusState.start, focusState.end);
+  }
+  detail.querySelectorAll("[data-select-ticket]").forEach(button => button.onclick = () => selectTicket(button.dataset.selectTicket));
+  detail.querySelectorAll("[data-ticket-message]").forEach(button => button.onclick = () => { const url = new URL(location.href); url.searchParams.set("view", "messages"); url.searchParams.delete("ticket"); url.searchParams.set("message", button.dataset.ticketMessage); history.pushState(null, "", url); setView("messages"); showMessage(button.dataset.ticketMessage); });
+  $("ticket-copy-id").onclick = () => copy(item.display_id || item.id, "Ticket id copied");
+  $("ticket-copy-link").onclick = () => copy(ticketUrl(item.id).href, "Ticket link copied");
   $("ticket-copy-md").onclick = async () => {
-    try { const text = await (await fetch(withProject(`/api/tickets/${encodeURIComponent(item.id)}/export`, activeProjectName()))).text(); await copy(text, "Ticket copied as Markdown"); }
+    try { const response = await fetch(withProject(`/api/tickets/${encodeURIComponent(item.id)}/export`, activeProjectName())); await copy(await response.text(), "Ticket copied as Markdown"); }
     catch (error) { toast(error.message); }
   };
   const actor = () => $("ta-actor").value;
-  const err = message => { $("ta-error").textContent = message; };
-  $("ta-assign").onclick = async () => { err(""); try { await ticketAction(item.id, "assign", {actor: actor(), assignee: $("ta-assignee").value}); await refresh(); } catch (error) { err(error.message); } };
-  $("ta-heartbeat").onclick = async () => { err(""); try { await ticketAction(item.id, "heartbeat", {actor: actor()}); await refresh(); } catch (error) { err(error.message); } };
-  $("ta-transition").onclick = async () => { err(""); try { await ticketAction(item.id, "transition", {actor: actor(), stage: $("ta-stage").value}); await refresh(); } catch (error) { err(error.message); } };
-  $("ta-comment-btn").onclick = async () => {
-    err(""); const summary = $("ta-comment").value.trim();
-    if (!summary) { err("Comment text is required"); return; }
-    try { await ticketAction(item.id, "comment", {actor: actor(), summary}); $("ta-comment").value = ""; await refresh(); } catch (error) { err(error.message); }
+  const perform = async (button, action, body, errorId = "ta-error", onSuccess = () => {}) => {
+    $(errorId).textContent = ""; button.disabled = true;
+    try { await ticketAction(item.id, action, {actor: actor(), ...body}); onSuccess(); await refresh(); }
+    catch (error) { $(errorId).textContent = error.message; }
+    finally { if (button.isConnected) button.disabled = false; }
   };
-  $("ta-review").onclick = async () => {
-    err(""); const findings = $("ta-findings").value.split("\n").map(line => line.trim()).filter(Boolean);
-    try { await ticketAction(item.id, "review", {actor: actor(), verdict: $("ta-verdict").value, summary: $("ta-review-summary").value, findings}); await refresh(); } catch (error) { err(error.message); }
+  $("ticket-assign-form").onsubmit = event => { event.preventDefault(); perform($("ta-assign"), "assign", {assignee: $("ta-assignee").value}, "ta-assign-error", () => $("ticket-assign-dialog").close()); };
+  $("ta-heartbeat").onclick = () => perform($("ta-heartbeat"), "heartbeat", {});
+  $("ta-transition").onclick = () => { if ($("ta-stage").value) perform($("ta-transition"), "transition", {stage: $("ta-stage").value}); };
+  $("ta-comment-btn").onclick = () => {
+    const body = $("ta-comment").value.trim(); const summary = body.split("\n")[0].slice(0, 300);
+    if (!body) { $("ta-comment-error").textContent = "Write a comment before sending."; $("ta-comment").focus(); return; }
+    perform($("ta-comment-btn"), "comment", {summary, body}, "ta-comment-error", () => { $("ta-comment").value = ""; });
   };
-  $("ta-done").onclick = async () => { err(""); try { await ticketAction(item.id, "done", {actor: actor()}); await refresh(); } catch (error) { err(error.message); } };
+  $("ticket-review-form").onsubmit = event => {
+    event.preventDefault(); const findings = $("ta-findings").value.split("\n").map(line => line.trim()).filter(Boolean);
+    perform($("ta-review"), "review", {verdict: $("ta-verdict").value, summary: $("ta-review-summary").value, findings}, "ta-review-error", () => $("ticket-review-dialog").close());
+  };
+  $("ta-done").onclick = () => perform($("ta-done"), "done", {});
   updateVisibleTimes();
 }
 
-function selectTicket(id) { selectedTicket = id; ticketDetailSignature = ""; renderTicketDetail(); revealOnMobile($("ticket-detail")); }
+function ticketUrl(id) {
+  const url = new URL(location.href);
+  url.hash = ""; url.searchParams.set("view", "tickets");
+  url.searchParams.set("project", activeProjectName());
+  if (id) url.searchParams.set("ticket", id); else url.searchParams.delete("ticket");
+  return url;
+}
+
+function selectTicket(id, navigate = true) {
+  selectedTicket = id; ticketDetailSignature = "";
+  if (navigate && location.href !== ticketUrl(id).href) history.pushState(null, "", ticketUrl(id));
+  renderTicketDetail(); loadTicketDiscussion(id); $("ticket-back")?.focus(); $("view-tickets").scrollIntoView({block: "start"});
+}
+
+window.addEventListener("popstate", async () => {
+  const route = new URL(location.href);
+  const project = route.searchParams.get("project");
+  if (project && project !== activeProjectName() && projects.some(item => item.name === project)) await setProject(project, false);
+  setView(route.searchParams.get("view") || route.hash.slice(1) || "messages");
+  if (currentView === "tickets") { selectedTicket = route.searchParams.get("ticket"); ticketDetailSignature = ""; renderTickets(); }
+  else if (currentView === "messages" && route.searchParams.get("message")) showMessage(route.searchParams.get("message"));
+});
 
 function renderTickets() {
   $("ticket-count").textContent = String(state.tickets.length);
   $("nav-tickets-count").textContent = String(state.tickets.filter(item => !TICKET_TERMINAL.has(item.stage)).length);
   syncOptions($("filter-tassignee"), [...new Set(state.tickets.map(item => item.assignee).filter(Boolean))]);
+  const parent = $("ticket-parent"); const parentValue = parent.value;
+  parent.innerHTML = '<option value="">No parent</option>' + state.tickets.map(item => `<option value="${escapeText(item.id)}">${escapeText(item.display_id || item.id)} · ${escapeText(item.title)}</option>`).join("");
+  parent.value = parentValue;
   renderTicketKanban();
   if (selectedTicket && !ticketsById().has(selectedTicket)) selectedTicket = null;
   renderTicketDetail();
+  if (selectedTicket) loadTicketDiscussion(selectedTicket);
   updateVisibleTimes();
 }
 
-function openTicketForm() { ticketFormOpener = document.activeElement; $("ticket-form").classList.remove("hidden"); $("ticket-form-error").textContent = ""; $("ticket-form").reset(); $("ticket-form").scrollIntoView({block: "nearest"}); $("ticket-id").focus(); }
+function openTicketForm() { ticketFormOpener = document.activeElement; $("ticket-form").classList.remove("hidden"); $("ticket-form-error").textContent = ""; $("ticket-form").reset(); $("ticket-form").scrollIntoView({block: "nearest"}); $("ticket-title").focus(); }
 function closeTicketForm() { $("ticket-form").classList.add("hidden"); (ticketFormOpener?.isConnected ? ticketFormOpener : $("new-ticket"))?.focus(); ticketFormOpener = null; }
 
 // ---------- refresh loop ----------
@@ -1201,11 +1292,30 @@ function summaryCounterText(value) {
 }
 
 function updateSummaryCounter(){const status=summaryStatus($("compose-summary").value);const counter=$("compose-summary-count");counter.textContent=summaryCounterText($("compose-summary").value);counter.classList.toggle("error",status.over);$("compose-summary").setAttribute("aria-invalid",String(status.over));}
-function openCompose(reply=null){$("compose-form").reset();$("compose-project").value=activeProjectName();$("compose-result").textContent="";$("reply-to").value="";$("compose-priority").value="NORMAL";const note=$("compose-reply-note");note.classList.toggle("hidden",!reply);if(reply){const defaults=replyDefaults(reply,state.choices.identities);$("reply-to").value=defaults.reply_to;$("compose-actor").value=defaults.actor;$("compose-to").value=defaults.to;$("compose-kind").value=defaults.kind;$("compose-priority").value=defaults.priority;$("compose-workstream").value=defaults.workstream;$("compose-summary").value=defaults.summary;note.textContent=`Replying to ${reply.id} · ${actorText(reply.from)} → ${actorText(reply.to)} · kind defaults to ANSWER (change it if this is not an answer)`;}updateSummaryCounter();$("compose-dialog").showModal();(reply?$("compose-body"):$("compose-summary")).focus();}
+let composeTicketGeneration = 0;
+async function populateComposeTickets(preferred = "") {
+  const generation = ++composeTicketGeneration;
+  const select = $("compose-ticket");
+  const project = $("compose-project").value || activeProjectName();
+  select.innerHTML = '<option value="">No linked ticket</option>' + (preferred ? `<option value="${escapeText(preferred)}">${escapeText(preferred)}</option>` : "");
+  select.value = preferred; select.disabled = true;
+  $("compose-ticket-note").textContent = "optional";
+  try {
+    const tickets = project === activeProjectName() ? state.tickets : (await api(withProject("/api/tickets", project))).tickets;
+    if (generation !== composeTicketGeneration) return;
+    select.innerHTML = '<option value="">No linked ticket</option>' + tickets.map(item => `<option value="${escapeText(item.id)}">${escapeText(item.display_id || item.id)} · ${escapeText(item.title)}</option>`).join("");
+    if (preferred && !tickets.some(item => item.id === preferred)) select.add(new Option(preferred, preferred));
+    select.value = preferred;
+  } catch {
+    if (generation === composeTicketGeneration) $("compose-ticket-note").textContent = "Ticket list unavailable; existing link retained";
+  } finally { if (generation === composeTicketGeneration) select.disabled = false; }
+}
+
+function openCompose(reply=null){$("compose-form").reset();$("compose-project").value=reply?.project || (reply ? messageProject(reply.id) : activeProjectName());$("compose-result").textContent="";$("reply-to").value="";$("compose-priority").value="NORMAL";const note=$("compose-reply-note");note.classList.toggle("hidden",!reply);if(reply){const defaults=replyDefaults(reply,state.choices.identities);$("reply-to").value=defaults.reply_to;$("compose-actor").value=defaults.actor;$("compose-to").value=defaults.to;$("compose-kind").value=defaults.kind;$("compose-priority").value=defaults.priority;$("compose-workstream").value=defaults.workstream;$("compose-summary").value=defaults.summary;note.textContent=`Replying to ${reply.id} · ${actorText(reply.from)} → ${actorText(reply.to)} · kind defaults to ANSWER (change it if this is not an answer)`;}populateComposeTickets(reply?.ticket_id || "");updateSummaryCounter();$("compose-dialog").showModal();(reply?$("compose-body"):$("compose-summary")).focus();}
 
 // ---------- keyboard ----------
 
-function listRowsForView(){return currentView==="messages"?[...$("message-list").querySelectorAll(".message-row .row-main")]:currentView==="roadmap"?[...$("roadmap-panel").querySelectorAll('[role="option"]')]:currentView==="tickets"?[...$("ticket-panel").querySelectorAll('[role="option"]')]:[];}
+function listRowsForView(){return currentView==="messages"?[...$("message-list").querySelectorAll(".message-row .row-main")]:currentView==="roadmap"?[...$("roadmap-panel").querySelectorAll('[role="option"]')]:currentView==="tickets" && !selectedTicket?[...$("ticket-panel").querySelectorAll('[role="option"]')]:[];}
 function focusedMessageId(){return document.activeElement?.closest?.(".message-row")?.dataset.id||null;}
 function moveSelection(delta){const rows=listRowsForView();if(!rows.length)return;const focused=rows.indexOf(document.activeElement);const currentId=currentView==="messages"?selectedMessage:currentView==="tickets"?selectedTicket:selectedRoadmap;let index=focused>=0?focused:rows.findIndex(row=>(row.closest("[data-id]")||row).dataset.id===currentId);index=index<0?(delta>0?0:rows.length-1):Math.max(0,Math.min(rows.length-1,index+delta));rows[index].focus();rows[index].scrollIntoView({block:"nearest"});}
 
@@ -1282,12 +1392,13 @@ $("standby-hours").addEventListener("change",()=>{store(STORAGE.standby,$("stand
 $("new-roadmap").onclick=()=>openRoadmap();$("cancel-roadmap").onclick=closeRoadmapEditor;$("roadmap-status").addEventListener("change",syncRoadmapFields);
 $("roadmap-form").addEventListener("submit",async event=>{event.preventDefault();try{const extension=changedExtension();await api("/api/roadmap",{method:"POST",body:JSON.stringify({project:activeProjectName(),actor:$("roadmap-actor").value,id:$("roadmap-id").value,title:$("roadmap-title").value,summary:$("roadmap-summary").value,status:$("roadmap-status").value,owner:$("roadmap-owner").value,progress:Number($("roadmap-progress").value),blocker:$("roadmap-blocker").value,expected_revision:Number($("roadmap-revision").value),...extension})});const id=$("roadmap-id").value;closeRoadmapEditor();toast("Roadmap item saved");await refresh();selectRoadmap(id);}catch(error){$("roadmap-error").textContent=error.message;}});
 $("new-ticket").onclick=()=>openTicketForm();$("cancel-ticket").onclick=closeTicketForm;
-$("ticket-form").addEventListener("submit",async event=>{event.preventDefault();try{await ticketApi("/api/tickets",{actor:$("ticket-actor").value,id:$("ticket-id").value,title:$("ticket-title").value,kind:$("ticket-kind").value,summary:$("ticket-summary").value,body:$("ticket-body").value,parent:$("ticket-parent").value||undefined,assignee:$("ticket-assignee").value||undefined,reviewer:$("ticket-reviewer").value||undefined});const id=$("ticket-id").value;closeTicketForm();toast("Ticket created");await refresh();selectTicket(id);}catch(error){$("ticket-form-error").textContent=error.message;}});
+$("ticket-form").addEventListener("submit",async event=>{event.preventDefault();try{const created=await ticketApi("/api/tickets",{actor:$("ticket-actor").value,title:$("ticket-title").value,kind:$("ticket-kind").value,summary:$("ticket-summary").value,body:$("ticket-body").value,parent:$("ticket-parent").value||undefined,assignee:$("ticket-assignee").value||undefined,reviewer:$("ticket-reviewer").value||undefined});const id=created.ticket.id;closeTicketForm();toast(`${created.ticket.display_id || "Ticket"} created`);await refresh();selectTicket(id);}catch(error){$("ticket-form-error").textContent=error.message;}});
 ["filter-tassignee","ticket-show-closed"].forEach(id=>$(id).addEventListener("change",renderTickets));
 $("ticket-search").addEventListener("input",renderTickets);
 $("show-compose").onclick=()=>openCompose();$("close-compose").onclick=()=>$("compose-dialog").close();
 $("compose-summary").addEventListener("input",updateSummaryCounter);
-$("compose-form").addEventListener("submit",async event=>{event.preventDefault();const result=$("compose-result");result.className="";const status=summaryStatus($("compose-summary").value);if(status.over||status.empty){result.className="error";result.textContent=status.empty?"Summary is required: the one line a reader sees in the list.":`Summary is ${status.length} characters, ${status.length-MAX_SUMMARY_CHARS} over the ${MAX_SUMMARY_CHARS}-character cap. Move the detail into the body.`;$("compose-summary").focus();return;}try{const value=await api("/api/messages",{method:"POST",body:JSON.stringify({project:$("compose-project").value||activeProjectName(),actor:$("compose-actor").value,to:$("compose-to").value,kind:$("compose-kind").value,priority:$("compose-priority").value,workstream:$("compose-workstream").value,summary:$("compose-summary").value,body:$("compose-body").value,reply_to:$("reply-to").value||null,requires_ack:$("compose-ack").checked})});result.textContent=value.results.map(item=>`${item.recipient}: ${item.ok?"sent":item.error}`).join("; ");if(value.ok){setTimeout(()=>$("compose-dialog").close(),600);await refresh();}}catch(error){result.className="error";result.textContent=error.message;}});
+$("compose-project").addEventListener("change",()=>populateComposeTickets());
+$("compose-form").addEventListener("submit",async event=>{event.preventDefault();const result=$("compose-result");result.className="";const status=summaryStatus($("compose-summary").value);if(status.over||status.empty){result.className="error";result.textContent=status.empty?"Summary is required: the one line a reader sees in the list.":`Summary is ${status.length} characters, ${status.length-MAX_SUMMARY_CHARS} over the ${MAX_SUMMARY_CHARS}-character cap. Move the detail into the body.`;$("compose-summary").focus();return;}try{const value=await api("/api/messages",{method:"POST",body:JSON.stringify({project:$("compose-project").value||activeProjectName(),actor:$("compose-actor").value,to:$("compose-to").value,kind:$("compose-kind").value,priority:$("compose-priority").value,workstream:$("compose-workstream").value,summary:$("compose-summary").value,body:$("compose-body").value,reply_to:$("reply-to").value||null,ticket_id:$("compose-ticket").value||null,requires_ack:$("compose-ack").checked})});result.textContent=value.results.map(item=>`${item.recipient}: ${item.ok?"sent":item.error}`).join("; ");if(value.ok){setTimeout(()=>$("compose-dialog").close(),600);await refresh();}}catch(error){result.className="error";result.textContent=error.message;}});
 document.addEventListener("visibilitychange",()=>{if(document.hidden)scheduleVersionPoll();else pollVersion();});
 
 // Deep links: ?view=roadmap&rmode=overview&theme=light&since=72&standby=72&closed=1&item=<id>&message=<id>
@@ -1299,4 +1410,4 @@ if([...$("roadmap-since").options].some(option=>option.value===params.get("since
 if([...$("standby-hours").options].some(option=>option.value===params.get("standby")))$("standby-hours").value=params.get("standby");
 if(params.get("closed")==="1")$("roadmap-show-closed").checked=true;
 setView(params.get("view")||location.hash.slice(1)||store(STORAGE.view)||"messages");
-loadProjects().then(refresh).then(()=>{if(params.get("item"))selectRoadmap(params.get("item"));if(params.get("message"))showMessage(params.get("message"));}).finally(pollVersion);
+loadProjects().then(refresh).then(()=>{if(params.get("item"))selectRoadmap(params.get("item"));if(params.get("message"))showMessage(params.get("message"));if(params.get("ticket"))selectTicket(params.get("ticket"),false);}).finally(pollVersion);

@@ -47,6 +47,34 @@ python -B agent_board_web.py --repo <repo-a> --repo <repo-b> --project extra=<pa
 
 Binds to loopback (127.0.0.1) only unless `--unsafe-allow-non-loopback` is passed.
 
+## Working a ticket
+
+The master scopes and assigns the work, maintains leases and dependencies, reviews
+it, integrates it and closes it. The actual developer posts a readable delivery
+comment **before QA**: what changed, the result, evidence, blockers, and the next
+action and owner. The reviewer then posts its own findings and conclusion.
+
+Developer and reviewer discussion stays in the ticket. The master uses the inbox
+with the Lead for rulings, escalations and handoffs. Link an existing same-project
+ticket with `post --ticket-id <canonical-ticket-id>` (HTTP: optional `ticket_id`
+on `POST /api/messages`). Unknown tickets are rejected; old messages are not backfilled.
+No agent posts under another agent's identity or rewrites historical authors.
+
+Use plain language first; link commits, test results, screenshots and structured
+artifacts as evidence. JSON is supporting detail, not the delivery message. UI
+completion requires verification of the actual rendered view and interaction,
+not tests alone. Report milestones and blockers, not each tool invocation.
+
+Read the current revision before updating and use optimistic revision checks.
+A blocked ticket names its dependency and unblock condition; deliberately parked
+work records a reason and resumption condition. Keep the next action and owner
+visible. Ticket display IDs use unpadded names such as `ATLAS-1`; immutable
+canonical IDs and historical links remain unchanged. Pass canonical IDs to message
+linking commands; no historical event rewrite is needed.
+
+See [the agent workflow](AGENTS.md#roles-and-ticket-workflow) for roles, handoffs
+and completion requirements.
+
 ## Windows notes
 
 Set `PYTHONIOENCODING=utf-8` before running under PowerShell/cmd to avoid cp1252
