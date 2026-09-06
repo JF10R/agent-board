@@ -527,7 +527,7 @@ class AgentBoardHandler(BaseHTTPRequestHandler):
                         "roadmap": board.list_roadmap(project.board_root),
                         "roadmap_tree": project.roadmap_tree_or_error(standby_hours),
                         "ack_backlog": ack_backlog(project.board_root),
-                        "tickets": tickets.list_tickets(project.board_root),
+                        "tickets": ticket_list(project.board_root),
                         "leases": tickets.list_leases(project.board_root),
                         "actors": tickets.list_actors(project.board_root),
                         "choices": {
@@ -587,7 +587,7 @@ class AgentBoardHandler(BaseHTTPRequestHandler):
                     HTTPStatus.OK,
                     {
                         "ok": True,
-                        "tickets": tickets.list_tickets(
+                        "tickets": ticket_list(
                             project.board_root,
                             stage=query.get("stage", [None])[0],
                             assignee=query.get("assignee", [None])[0],
@@ -752,9 +752,17 @@ def _string_list(value: Any, label: str, item_cap: int) -> list[str]:
     return [_string(item, f"{label} entry", item_cap) for item in value]
 
 
+def ticket_list(root: Path, **filters: Any) -> list[dict[str, Any]]:
+    items = tickets.list_tickets(root, **filters)
+    for item in items:
+        item["open_blockers"] = tickets._open_blockers(root, item)
+    return items
+
+
 def ticket_detail(root: Path, ticket_id: str) -> dict[str, Any]:
     ticket = tickets.get_ticket(root, ticket_id)
-    linked = []
+    ticket["open_blockers"] = tickets._open_blockers(root, ticket)
+    messages = {}
     malformed = 0
     for path in (root / "messages").glob("*.md"):
         try:
@@ -763,9 +771,36 @@ def ticket_detail(root: Path, ticket_id: str) -> dict[str, Any]:
         except (board.BoardError, board._OversizedRuntimeFile, OSError, UnicodeError, ValueError, TypeError):
             malformed += 1
             continue
-        if metadata.get("ticket_id") == ticket_id:
-            linked.append(metadata)
-    linked.sort(key=lambda message: (board.datetime.fromisoformat(message["created_at"].replace("Z", "+00:00")), message["id"]), reverse=True)
+        metadata["acked"] = board._ack_path(root, metadata["id"], metadata["to"]).is_file()
+        messages[metadata["id"]] = metadata
+    children: dict[str, list[str]] = {}
+    for message in messages.values():
+        if message.get("reply_to") in messages:
+            children.setdefault(message["reply_to"], []).append(message["id"])
+    # Each message has one parent. Explicit references start independent roots;
+    # inheritance stops at another explicit reference, even inside a cycle.
+    effective_ticket = {}
+    pending = [(message["id"], message["ticket_id"]) for message in messages.values() if message.get("ticket_id")]
+    while pending:
+        message_id, reference = pending.pop()
+        if message_id in effective_ticket:
+            continue
+        effective_ticket[message_id] = reference
+        pending.extend((child, reference) for child in children.get(message_id, []) if not messages[child].get("ticket_id"))
+
+    def newest_first(message: Mapping[str, Any]) -> tuple[Any, str]:
+        return (board.datetime.fromisoformat(message["created_at"].replace("Z", "+00:00")), message["id"])
+
+    linked = []
+    for message_id, reference in effective_ticket.items():
+        if reference != ticket_id:
+            continue
+        message = {**messages[message_id], "linked_ticket_id": reference}
+        replies = [{**messages[child], "linked_ticket_id": effective_ticket.get(child)} for child in children.get(message_id, [])]
+        message["replies"] = sorted(replies, key=newest_first, reverse=True)
+        message["answered"] = bool(replies)
+        linked.append(message)
+    linked.sort(key=newest_first, reverse=True)
     ticket["linked_messages"] = linked
     ticket["linked_messages_malformed"] = malformed
     return ticket
