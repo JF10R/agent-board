@@ -505,3 +505,13 @@ dialog form, dialog .dialog-body { padding: 6px 20px 20px; }
 .ticket-inbox-link { display: grid; gap: 5px; width: 100%; padding: 12px 0; border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left; }
 .ticket-inbox-link span { font-size: var(--fs-xs); color: var(--quiet); }
 .ticket-inbox-link small { color: var(--accent); font-size: var(--fs-xs); }
+
+.ticket-blocked-label { color: var(--red); font-weight: 600; }
+.ticket-blocker-banner { display: grid; gap: 6px; margin: 20px 24px 0; padding: 12px 16px; border: 1px solid var(--red); border-radius: 6px; background: var(--red-soft); font-size: var(--fs-sm); }
+.ticket-blocker-banner a { color: var(--text); text-underline-offset: 3px; }
+.ticket-inbox-entry { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.ticket-inbox-entry .ticket-inbox-link { border-bottom: 0; color: var(--text); text-decoration: none; }
+.ticket-inbox-link:hover strong { color: var(--accent); text-decoration: underline; }
+.ticket-message-status { display: flex; flex-wrap: wrap; gap: 6px; }
+.ticket-message-replies { display: grid; gap: 5px; margin: 10px 0 0 12px; padding-left: 12px; border-left: 2px solid var(--line-strong); font-size: var(--fs-sm); }
+.ticket-message-replies a { color: var(--accent); overflow-wrap: anywhere; }

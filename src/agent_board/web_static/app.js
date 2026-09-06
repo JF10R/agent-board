@@ -958,6 +958,16 @@ const ticketDiscussionLoads = new Set();
 
 function ticketsById() { return new Map(state.tickets.map(item => [item.id, item])); }
 
+function ticketOpenBlockers(item) {
+  return (item.open_blockers || []).map(id => ({id, ticket: ticketsById().get(id)}));
+}
+
+function ticketBlockerMarkup(item) {
+  const blockers = ticketOpenBlockers(item);
+  if (!blockers.length) return item.stage === "BLOCKED" ? '<div class="ticket-blocker-banner"><strong>Marked blocked</strong><span>No open blocking dependency is recorded.</span></div>' : "";
+  return `<div class="ticket-blocker-banner"><strong>Waiting on ${blockers.length} blocking ${blockers.length === 1 ? "ticket" : "tickets"}</strong><span>${blockers.map(({id, ticket}) => `<a href="${escapeText(ticketUrl(id).href)}">${escapeText(ticket?.display_id || id)}${ticket ? ` · ${escapeText(ticket.title)}` : ' · dependency unavailable'}</a>`).join("<br>")}</span></div>`;
+}
+
 function ticketMatches(item) {
   const assignee = $("filter-tassignee").value;
   if (assignee && item.assignee !== assignee) return false;
@@ -996,7 +1006,7 @@ function renderTicketKanban() {
     row.setAttribute("aria-selected", String(selectedTicket === item.id));
     row.querySelector(".ticket-row-stage").innerHTML = ticketStagePill(item.stage);
     row.querySelector("strong").textContent = item.title;
-    row.querySelector(".ticket-row-meta").innerHTML = `${escapeText(item.display_id || item.id)} · ${escapeText(item.kind)}${item.lease_stale ? ' · <span class="error">Lease expired</span>' : ""}${(item.deps || []).some(dep => dep.type === "BLOCKED_BY") ? ' · Dependencies' : ""}`;
+    row.querySelector(".ticket-row-meta").innerHTML = `${escapeText(item.display_id || item.id)} · ${escapeText(item.kind)}${item.lease_stale ? ' · <span class="error">Lease expired</span>' : ""}${ticketOpenBlockers(item).length ? ` · <span class="ticket-blocked-label" title="${escapeText(ticketOpenBlockers(item).map(({id, ticket}) => ticket?.display_id || id).join(', '))}">Blocked by ${ticketOpenBlockers(item).length} ${ticketOpenBlockers(item).length === 1 ? 'ticket' : 'tickets'}</span>` : ''}`;
     row.querySelector(".ticket-row-owner").textContent = ticketActorLabel(item.assignee);
     row.querySelector(".ticket-row-owner").title = item.assignee || "Unassigned";
     applyTimestamp(row.querySelector("time"), item.updated_at, true);
@@ -1032,11 +1042,26 @@ async function loadTicketDiscussion(id) {
   }
 }
 
+function ticketMessageUrl(id) {
+  const url = new URL(location.href); url.hash = "";
+  url.searchParams.set("view", "messages"); url.searchParams.set("project", activeProjectName());
+  url.searchParams.delete("ticket"); url.searchParams.set("message", id); return url;
+}
+
+function ticketMessageStatus(message) {
+  const status = [];
+  if (message.requires_ack && message.acked === false) status.push(tagMarkup("Awaiting ACK", "amber"));
+  if (message.requires_ack && message.acked === true) status.push(tagMarkup("Acknowledged", "green"));
+  if (message.answered === true) status.push(tagMarkup("Replied", "blue"));
+  if (message.answered === false) status.push(tagMarkup("No reply"));
+  return status.join("");
+}
+
 function ticketDiscussionMarkup(discussion) {
   if (!discussion) return '<p class="quiet">Loading linked inbox discussion…</p>';
   if (discussion.error) return '<p class="quiet">Linked inbox discussion is unavailable. Refresh to retry.</p>';
   if (!discussion.messages.length && !discussion.malformed) return "";
-  return `<section class="ticket-inbox-discussion"><h3>Linked inbox discussion <span class="quiet">${discussion.messages.length}</span></h3>${discussion.malformed ? '<p class="quiet">Some message files could not be read; this list may be incomplete.</p>' : ""}${[...discussion.messages].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id)).map(message => `<button type="button" class="ticket-inbox-link" data-ticket-message="${escapeText(message.id)}"><strong>${escapeText(message.summary)}</strong><span>${escapeText(ticketActorLabel(message.from))} → ${escapeText(ticketActorLabel(message.to))} · ${timeMarkup(message.created_at, true)}</span><small>Open in Inbox ↗</small></button>`).join("")}</section>`;
+  return `<section class="ticket-inbox-discussion"><h3>Linked inbox discussion <span class="quiet">${discussion.messages.length}</span></h3>${discussion.malformed ? '<p class="quiet">Some message files could not be read; this list may be incomplete.</p>' : ""}${[...discussion.messages].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id)).map(message => `<article class="ticket-inbox-entry"><a class="ticket-inbox-link" href="${escapeText(ticketMessageUrl(message.id).href)}" data-ticket-message="${escapeText(message.id)}"><strong>${escapeText(message.summary)}</strong><span>${escapeText(ticketActorLabel(message.from))} → ${escapeText(ticketActorLabel(message.to))} · ${timeMarkup(message.created_at, true)}</span><small>Open in Inbox ↗</small></a><div class="ticket-message-status">${ticketMessageStatus(message)}</div>${message.replies?.length ? `<div class="ticket-message-replies"><span class="quiet">Replies</span>${[...message.replies].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id)).map(reply => `<a href="${escapeText(ticketMessageUrl(reply.id).href)}" data-ticket-message="${escapeText(reply.id)}">${escapeText(reply.summary)} ↗</a>`).join("")}</div>` : ""}</article>`).join("")}</section>`;
 }
 
 function ticketAuthorMarkup(id) {
@@ -1091,7 +1116,7 @@ function renderTicketDetail() {
   const options = TICKET_LANES.filter(([key]) => key !== "DONE").map(([key, title]) => `<option value="${key}" ${key === item.stage ? "selected" : ""}>${escapeText(title)}</option>`).join("");
   detail.innerHTML = `<div class="ticket-breadcrumb"><button id="ticket-back" type="button" class="ghost">← Tickets</button><span>/</span><span class="ticket-project-name">${escapeText(activeProjectName() || "Project")}</span><span>/</span><button id="ticket-copy-id" type="button" class="ghost mono" title="Copy ticket ID">${escapeText(item.display_id || item.id)}</button><button id="ticket-copy-link" type="button" class="ghost">Copy link</button><button id="ticket-copy-md" type="button" class="ghost ticket-export">Copy Markdown</button></div>
     <header class="ticket-issue-head"><div class="badges">${ticketStagePill(item.stage)}${tagMarkup(item.kind)}</div><h2>${escapeText(item.title)}</h2><div class="ticket-command-bar"><button id="ticket-reply" type="button" class="secondary">Comment</button><button id="ticket-review-open" type="button" class="secondary">Record review</button><button id="ta-done" type="button" class="ghost">✓ Mark done</button><label class="ticket-acting">Acting as <select id="ta-actor" aria-label="Acting master">${identities.map(id => `<option value="${escapeText(id)}">${escapeText(ticketActorLabel(id))}</option>`).join("")}</select></label></div></header>
-    <p id="ta-error" class="error" role="alert"></p>
+    ${ticketBlockerMarkup(item)}<p id="ta-error" class="error" role="alert"></p>
     <div class="ticket-issue-grid"><div class="ticket-main">
       ${item.summary ? `<p class="ticket-summary">${escapeText(item.summary)}</p>` : ""}
       ${item.body ? `<details class="ticket-description" ${descriptionOpen ? "open" : ""}><summary>Description <span class="quiet">${item.body.length >= 1200 ? "Full context" : ""}</span></summary><div class="markdown-body">${renderMarkdown(item.body)}</div></details>` : ""}
@@ -1128,7 +1153,7 @@ function renderTicketDetail() {
     if (typeof focusState.start === "number") node.setSelectionRange(focusState.start, focusState.end);
   }
   detail.querySelectorAll("[data-select-ticket]").forEach(button => button.onclick = () => selectTicket(button.dataset.selectTicket));
-  detail.querySelectorAll("[data-ticket-message]").forEach(button => button.onclick = () => { const url = new URL(location.href); url.searchParams.set("view", "messages"); url.searchParams.delete("ticket"); url.searchParams.set("message", button.dataset.ticketMessage); history.pushState(null, "", url); setView("messages"); showMessage(button.dataset.ticketMessage); });
+  detail.querySelectorAll("[data-ticket-message]").forEach(link => link.onclick = event => { if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); history.pushState(null, "", link.href); setView("messages"); showMessage(link.dataset.ticketMessage); });
   $("ticket-copy-id").onclick = () => copy(item.display_id || item.id, "Ticket id copied");
   $("ticket-copy-link").onclick = () => copy(ticketUrl(item.id).href, "Ticket link copied");
   $("ticket-copy-md").onclick = async () => {
