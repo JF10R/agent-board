@@ -7,11 +7,13 @@ the full agent-facing guide.
 
 ## Install
 
-Stdlib only — no third-party dependencies. Requires Python 3.10+.
+Runtime uses only the standard library. Requires Python 3.10+.
+Development checks use the optional tools below.
 
 ```
 git clone <this repo> agent-board
 cd agent-board
+python -m pip install -e ".[dev]"
 python -m pytest tests -q
 ```
 
@@ -46,6 +48,18 @@ python -B agent_board_web.py --repo <repo-a> --repo <repo-b> --project extra=<pa
 ```
 
 Binds to loopback (127.0.0.1) only unless `--unsafe-allow-non-loopback` is passed.
+
+## Receive messages without polling
+
+```text
+python -B agent_board_watch.py --repo <path-to-a-repo> --actor lead --cursor-file <cursor-path>
+```
+
+The standalone listener streams NDJSON using native filesystem notifications.
+Run it in a persistent background supervisor, and let your harness adapter consume
+stdout. No Codex timer is involved. The adapter must deduplicate message IDs and
+forward messages to its model/session; printing an event does not inject it into
+a conversation. See [push listener](docs/push-listener.md) for restart behavior.
 
 ## Working a ticket
 
@@ -83,3 +97,26 @@ decode errors when reading or printing UTF-8 content.
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
+
+## Development checks
+
+```text
+python -m pytest tests -q
+python -m build
+python -m ruff check --select F src/agent_board agent_board.py agent_board_web.py agent_board_watch.py
+```
+
+CI runs tests on Python 3.10 and 3.13 on Ubuntu, Windows and macOS, plus
+Ruff static correctness checks. A separate packaging
+check builds the wheel, installs it outside the checkout, imports the package and
+checks that dashboard assets are present. Root launchers run directly from a clone;
+the wheel includes the importable `agent_board` package and installed commands
+`agent-board`, `agent-board-web` and `agent-board-watch`.
+
+[CLI reference](docs/cli-reference.md) lists every command and flag.
+[HTTP contract](docs/http-api.md) covers routes, write tokens and request examples.
+[Storage and bootstrap](docs/storage.md) explains project vocabulary, actor roles
+and the separate roadmap stores. Documentation examples run against temporary stores.
+
+Measure isolated workloads with `python -B tools/benchmark_tickets.py --tickets 20 --events 20 --workers 2`.
+JSON records workload size and timings; the benchmark never uses the live board.

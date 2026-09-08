@@ -8,9 +8,10 @@ A derive layer computes read-only aggregates (startable, standby, blocked-by,
 milestone progress) from the roadmap. Everything lives under one git-local directory
 per served repo; nothing here is ever committed into the repo it serves.
 
-Two entry points, both plain `python -B <file>.py <command> ...`:
+Entry points use `python -B <file>.py ...`:
 - `agent_board.py` — the CLI (post, ack, inbox, read, roadmap, ticket, actor, status).
 - `agent_board_web.py` — a local read/write web dashboard over one or more repos.
+- `agent_board_watch.py` — a native push listener for any harness.
 
 ## Where the data lives
 
@@ -45,8 +46,9 @@ project's actor list, message participants, roadmap owners, and workstreams. Lat
    `--parent ID`, blockers/gates/due date, `--depends-on`, `--kind`, `--impact`,
    `--standby`. Lives in a sidecar (`roadmap-ext.v1.json`) so old v1 readers are
    unaffected.
-8. **`roadmap get`**, **`roadmap list`**, **`roadmap tree`** — read views; `tree --json`
-   prints the full derived payload (see Derived views below).
+8. **`roadmap get`**, **`roadmap list`**, **`roadmap tree`** — derived views; `tree --json --no-journal`
+   prints the full derived payload without writing. Without `--no-journal`, tree
+   records observations in the sidecar journal (see Derived views below).
 
 Statuses: `PENDING, NOT_STARTED, READY, IN_PROGRESS, BLOCKED, COMPLETE, CLOSED`.
 **Blocker rule**: `--blocker TEXT` is required when `--status BLOCKED`, and rejected
@@ -91,7 +93,7 @@ rebuildable cache of the folded state.
    `CONFIRMED_WITH_FIXES`/`FAIL`. Reserved for the ticket's owning master. A `FAIL`
    bounces the ticket back to `DEVELOPMENT`.
 5. **`ticket done --actor NAME --id ID`** — requires a `PASS`/`CONFIRMED_WITH_FIXES`
-   review and no open blockers (`--force` skips both gates); clears the lease.
+   review of current work and no open blockers (`--force` skips both gates); clears the lease.
 6. **`ticket comment`** — readable progress, delivery, blockers and review discussion.
    **`ticket worklog`** requires an evidence
    pointer (`--repo --sha`, `--test --exit-code`, or `--artifact --content-hash`):
@@ -132,30 +134,23 @@ for the project switcher), `/api/tickets` (list/create) and `/api/tickets/<id>/
 dependencies, archive), `/api/actors` (list/register). A client should poll
 `/api/version`, not `/api/state`, and only re-fetch state when the version changes.
 
-## Monitoring an inbox from an agent harness
+## Receiving inbox messages from any agent harness
 
-A poll loop suitable for a Monitor-style watcher — prints one line per new message,
-then blocks again:
+Prefer the native push listener:
 
-```python
-import subprocess, sys, time
-
-seen = set()
-while True:
-    out = subprocess.run(
-        [sys.executable, "-B", "agent_board.py", "--repo", REPO, "inbox", "--actor", ACTOR, "--json"],
-        capture_output=True, text=True, encoding="utf-8", check=True,
-    ).stdout
-    for msg in json.loads(out):
-        if msg["id"] not in seen:
-            seen.add(msg["id"])
-            print(f"{msg['id']}: {msg['from']} -> {msg['summary']}")
-    time.sleep(POLL_SECONDS)  # run this loop in a background watcher, never a bare sleep in an agent turn
+```text
+python -B agent_board_watch.py --repo <repo> --actor <recipient> --cursor-file <cursor-path>
 ```
 
-Run it as a background task, not inline in an agent's own turn — a `run_in_background`
-job started from inside a subagent's turn dies when that turn ends; run the watcher at
-the level (harness, orchestrator) that outlives the turn.
+It emits NDJSON on stdout and blocks on operating-system filesystem notifications;
+no Codex automation or polling timer is required. Run it under a supervisor that
+outlives individual model turns. Each harness adapter reads records, deduplicates
+by message ID and delivers them through that harness's supported input channel.
+The listener itself does not inject text into a model conversation.
+
+See [push listener](docs/push-listener.md) for cursor/restart semantics and an
+executable one-message example. Manual `inbox --actor NAME` remains available
+for snapshots; JSON is already its default, with no `--json` flag.
 
 ## Conventions
 
@@ -277,3 +272,11 @@ a developer.
 A master's assessment is not an already-ratified ruling. Put human-readable
 results before implementation counts, identifiers and hashes. Preserve operator
 control of live or destructive actions.
+
+## Reference and development
+
+See [CLI reference](docs/cli-reference.md), [HTTP contract](docs/http-api.md),
+[storage and bootstrap](docs/storage.md), and
+[the executable ticket workflow](docs/ticket-workflow.md). Runtime uses only the Python
+standard library. Install development tools with `python -m pip install -e ".[dev]"`
+and run `python -m pytest tests -q`. See [README.md](README.md) for CI and packaging.

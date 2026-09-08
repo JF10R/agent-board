@@ -25,3 +25,9 @@ RULE revision-safety
 cfg entry-points
   python -B agent_board.py <command> ...       — CLI
   python -B agent_board_web.py --repo <path>   — web dashboard
+
+RULE references
+  docs/cli-reference.md is generated; regenerate after CLI changes.
+  docs/http-api.md documents HTTP routes and tokens.
+  docs/storage.md distinguishes vocabulary, actors and roadmap stores.
+  roadmap tree journals unless --no-journal is supplied.
