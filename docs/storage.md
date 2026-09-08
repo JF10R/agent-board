@@ -18,7 +18,10 @@ at least one identity. `init` does not reset it. Stores with no configuration us
 the fallback `gpt-master` / `claude-master` vocabulary until explicitly initialized.
 Existing project configurations and historical records are not renamed automatically.
 Historical roadmap owners named `sol-master` remain readable when `gpt-master` is
-an allowed owner. New writes require the current configured vocabulary.
+an allowed owner. Historical message senders, recipients, acknowledgments and status
+identities are also readable under the corresponding current identity. Original
+authorship and stored bytes are preserved. New writes require the current configured
+vocabulary. Restart a running dashboard after updating backend code.
 
 The ticket actor registry (`actors.v1.json`) is separate. `actor register master
 --role master` records ticket role and ownership relationships; it does not edit

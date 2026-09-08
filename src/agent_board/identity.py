@@ -106,17 +106,19 @@ def project_config(root: Path | None) -> dict[str, Any]:
     return sets
 
 
-def require_identity(identity: str, root: Path | None = None) -> str:
+def require_identity(identity: str, root: Path | None = None, *, historical: bool = False) -> str:
     allowed_set = project_config(root)["identities"]
-    if identity not in allowed_set:
+    legacy = historical and identity == "sol-master" and "gpt-master" in allowed_set
+    if identity not in allowed_set and not legacy:
         allowed = ", ".join(sorted(allowed_set))
         raise BoardError(f"unauthorized identity {identity!r}; allowed: {allowed}")
     return identity
 
 
-def require_message_sender(identity: str, root: Path | None = None) -> str:
+def require_message_sender(identity: str, root: Path | None = None, *, historical: bool = False) -> str:
     allowed_set = project_config(root)["message_senders"]
-    if identity not in allowed_set:
+    legacy = historical and identity == "sol-master" and "gpt-master" in allowed_set
+    if identity not in allowed_set and not legacy:
         allowed = ", ".join(sorted(allowed_set))
         raise BoardError(
             f"unauthorized identity {identity!r} for message sender; allowed: {allowed}"
@@ -124,9 +126,10 @@ def require_message_sender(identity: str, root: Path | None = None) -> str:
     return identity
 
 
-def require_message_recipient(identity: str, root: Path | None = None) -> str:
+def require_message_recipient(identity: str, root: Path | None = None, *, historical: bool = False) -> str:
     allowed_set = project_config(root)["message_recipients"]
-    if identity not in allowed_set:
+    legacy = historical and identity == "sol-master" and "gpt-master" in allowed_set
+    if identity not in allowed_set and not legacy:
         allowed = ", ".join(sorted(allowed_set))
         raise BoardError(
             f"unauthorized identity {identity!r} for message recipient; allowed: {allowed}"

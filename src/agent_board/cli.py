@@ -368,8 +368,8 @@ def _validate_state_message(path: Path, metadata: Mapping[str, Any]) -> datetime
     message_id = _require_safe_token("message id", metadata["id"])
     if message_id != path.stem:
         raise BoardError("message id does not match its filename")
-    _require_message_sender(metadata["from"], _store_root_of(path))
-    _require_message_recipient(metadata["to"], _store_root_of(path))
+    _require_message_sender(metadata["from"], _store_root_of(path), historical=True)
+    _require_message_recipient(metadata["to"], _store_root_of(path), historical=True)
     if metadata["kind"] not in KINDS or metadata["priority"] not in PRIORITIES:
         raise BoardError("message kind or priority is invalid")
     if not isinstance(metadata.get("requires_ack"), bool):
@@ -581,7 +581,7 @@ def read_message(root: Path, message_id: str) -> tuple[dict[str, Any], str, str]
 
 def _ack_path(root: Path, message_id: str, actor: str) -> Path:
     _require_safe_token("message id", message_id)
-    _require_message_recipient(actor, root)
+    _require_message_recipient(actor, root, historical=True)
     return root / "acks" / f"{message_id}--{actor}.json"
 
 
@@ -647,7 +647,7 @@ def _validate_status_file(path: Path, value: Any) -> dict[str, Any]:
         raise BoardError("status JSON has an invalid shape")
     if value.get("identity") != path.stem:
         raise BoardError("status identity does not match its filename")
-    _require_identity(value["identity"], _store_root_of(path))
+    _require_identity(value["identity"], _store_root_of(path), historical=True)
     if value.get("state") not in STATUS_STATES:
         raise BoardError("status state is invalid")
     for field in ("workstream", "head", "summary", "updated_at"):
