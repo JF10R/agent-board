@@ -552,9 +552,10 @@ h2 { letter-spacing: -.015em; }
 .connection { font-weight: 500; }
 .status-dot { width: 6px; height: 6px; }
 main { padding: 0 clamp(22px, 3.4vw, 56px) 60px; }
-.workspace-context { display: flex; justify-content: space-between; gap: 16px; padding: 27px 0 21px; border-bottom: 1px solid var(--line); color: var(--quiet); font-size: 11px; }
-.workspace-context span:first-child { color: var(--muted); }
-.view-head { position: relative; padding: 30px 0 24px; gap: 25px; background: none; }
+.workspace-context { display: none; }
+.view-head { position: relative; padding: 16px 0; gap: 12px; background: none; }
+.view-head .eyebrow { display: none; }
+.view-head h1 { font-size: 28px; }
 .eyebrow { font-size: 12px; font-weight: 400; letter-spacing: 0; text-transform: none; margin-bottom: 7px; }
 .count { margin-left: 6px; background: var(--surface-3); padding: 3px 9px; font-size: 11px; font-family: var(--font-body); letter-spacing: 0; }
 .toolbar { gap: 12px; }
@@ -566,7 +567,7 @@ main { padding: 0 clamp(22px, 3.4vw, 56px) 60px; }
 .seg button + button { border: 0; }
 .seg button[aria-pressed="true"] { color: var(--text); background: var(--surface); box-shadow: 0 1px 4px #254b7d10; }
 .btn, .primary, .secondary, .ghost, .danger-button { min-height: 36px; padding: 7px 13px; font-size: 12px; font-weight: 550; }
-.view-head-row > .primary, .view-head-row > .secondary { min-height: 40px; border: 0; background: var(--accent); color: var(--accent-ink); box-shadow: 0 3px 7px #1464ed15; padding: 9px 16px; }
+.view-head-row > .primary, .view-head-row > .secondary { min-height: 36px; border: 0; background: var(--accent); color: var(--accent-ink); box-shadow: 0 3px 7px #1464ed15; padding: 6px 14px; }
 .view-head-row > button::before { content: '+'; margin-right: 8px; font-size: 18px; vertical-align: -1px; font-weight: 400; }
 .primary kbd { border: 0; color: inherit; background: #ffffff20; margin-left: 8px; }
 .panel { overflow: hidden; }
@@ -687,8 +688,6 @@ dialog::backdrop { backdrop-filter: blur(7px); }
   .rail-count { margin-left: 0; min-width: 0; padding: 0 3px; font-size: 10px; }
   .nav-icon { width: 16px; height: 16px; margin: 0; }
   main { padding: 0 22px 40px; }
-  .workspace-context { padding: 17px 0 13px; }
-  .view-head { padding: 23px 0 20px; gap: 20px; }
   .message-layout, .roadmap-layout { grid-template-columns: 1fr; }
   .message-list { max-height: 360px; }
   .ticket-issue-grid { display: flex; flex-direction: column; }
@@ -713,7 +712,8 @@ dialog::backdrop { backdrop-filter: blur(7px); }
   .views .rail-count { display: none; }
   main { padding: 0 14px 32px; }
   .workspace-context { display: none; }
-  .view-head { padding: 22px 3px 18px; gap: 17px; }
+  .view-head { padding: 12px 0; gap: 10px; }
+  .view-head h1 { font-size: 25px; }
   .eyebrow { display: none; }
   h1 { font-size: 27px; }
   .view-head-row { gap: 8px; }
