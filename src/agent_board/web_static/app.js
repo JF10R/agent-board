@@ -47,7 +47,8 @@ let versionTimer = null;
 const POLL_SECONDS = Math.max(1, Number(new URLSearchParams(location.search).get("poll")) || 10);
 const ALL_PROJECTS = "__all";
 let projects = [];                    // [{name, board_root}] served by this instance
-let activeProject = null;             // a project name, or ALL_PROJECTS (inbox only)
+let activeProject = null;             // a project name, or the explicit portfolio scope
+let projectSnapshots = [];
 
 function store(key, value) {
   try { if (value === undefined) return window.localStorage.getItem(key); window.localStorage.setItem(key, value); return value; }
@@ -56,8 +57,8 @@ function store(key, value) {
 
 // ---------- projects ----------
 
-// One store per repo. ALL_PROJECTS merges the inboxes only: roadmap, presence and derive stay per project.
-function activeProjectName() { return activeProject === ALL_PROJECTS ? (projects[0]?.name || "") : (activeProject || ""); }
+// Aggregate views never choose a repository on the user's behalf.
+function activeProjectName() { return activeProject === ALL_PROJECTS ? ALL_PROJECTS : (activeProject || ""); }
 function multiProject() { return projects.length > 1; }
 function messageProject(id) { return (state.messages.find(item => item.id === id) || {}).project || activeProjectName(); }
 function withProject(path, project) { return `${path}${path.includes("?") ? "&" : "?"}project=${encodeURIComponent(project || activeProjectName())}`; }
@@ -75,16 +76,44 @@ async function loadProjects() {
 
 function renderProjectSwitcher() {
   const wrap = $("project-switch");
-  wrap.classList.toggle("hidden", !multiProject());
+  wrap.classList.remove("hidden");
   const select = $("project-select");
   const options = [...projects.map(item => [item.name, item.name]), ...(multiProject() ? [[ALL_PROJECTS, "All projects"]] : [])];
   select.innerHTML = options.map(([value, label]) => `<option value="${escapeText(value)}">${escapeText(label)}</option>`).join("");
   select.value = activeProject;
+  $("project-label").textContent = activeProject === ALL_PROJECTS ? "All projects" : activeProject || "No project";
+  $("scope-label").textContent = activeProject === ALL_PROJECTS ? `${projects.length} projects · Overview` : activeProject || "Workspace";
+  $("project-options").innerHTML = options.map(([value, label]) => `<button type="button" data-project="${escapeText(value)}" aria-current="${value === activeProject ? "true" : "false"}"><span class="project-symbol" aria-hidden="true">${value === ALL_PROJECTS ? "▦" : escapeText(label.slice(0, 1).toUpperCase())}</span><span>${escapeText(label)}<small>${value === ALL_PROJECTS ? "Every workspace at a glance" : "Project workspace"}</small></span><span class="project-check" aria-hidden="true">${value === activeProject ? "✓" : ""}</span></button>`).join("");
+  $("project-options").querySelectorAll("button").forEach(button => button.onclick = () => { closeProjectPicker(); $("project-picker").focus(); setProject(button.dataset.project); });
   syncOptions($("compose-project"), projects.map(item => item.name));
   $("compose-project-field").classList.toggle("hidden", !multiProject());
 }
 
+function closeProjectPicker() { $("project-menu").hidden = true; $("project-picker").setAttribute("aria-expanded", "false"); }
+
+function renderProjectOverview() {
+  const aggregate = activeProject === ALL_PROJECTS;
+  document.body.classList.toggle("all-projects", aggregate);
+  for (const view of VIEWS) {
+    let overview = $(`projects-${view}`);
+    if (!overview) { overview = document.createElement("div"); overview.id = `projects-${view}`; overview.className = "project-overview"; $(`view-${view}`).append(overview); }
+    overview.hidden = !aggregate;
+    if (!aggregate) continue;
+    const noun = {messages:"messages",roadmap:"roadmap items",tickets:"tickets",presence:"active leases"}[view];
+    overview.innerHTML = `<div class="portfolio-intro"><h2>One place. Every project.</h2><p>Choose a workspace to explore its ${noun} and move work forward.</p></div><div class="project-card-grid">${projectSnapshots.map(snapshot => {
+      const tickets = snapshot.tickets || [], messages = snapshot.messages || [], roadmap = snapshot.roadmap || [];
+      const open = tickets.filter(ticket => !["DONE", "CANCELLED"].includes(ticket.stage));
+      const attention = view === "messages" ? messages.filter(needsAck).length : view === "roadmap" ? roadmap.filter(item => item.status === "BLOCKED").length : tickets.filter(item => item.stage === "BLOCKED" || item.lease_stale).length;
+      const count = {messages: snapshot.messages_meta?.total ?? messages.length,roadmap:roadmap.length,tickets:open.length,presence:(snapshot.leases || []).length}[view];
+      return `<button type="button" class="project-card" data-project="${escapeText(snapshot.project)}"><span class="project-card-head"><span class="project-symbol">${escapeText(snapshot.project.slice(0, 1).toUpperCase())}</span><span aria-hidden="true">↗</span></span><strong>${escapeText(snapshot.project)}</strong><span class="project-card-metric">${count}<small>${view === "tickets" ? "open tickets" : noun}</small></span><span class="project-card-foot">${attention ? `<span class="attention-dot"></span>${attention} ${view === "messages" ? "awaiting acknowledgement" : "need attention"}` : '<span class="healthy-dot"></span>Nothing needs attention'}<span aria-hidden="true">→</span></span></button>`;
+    }).join("")}</div>`;
+    overview.querySelectorAll("[data-project]").forEach(button => button.onclick = () => setProject(button.dataset.project));
+  }
+  for (const id of ["show-compose", "new-roadmap", "new-ticket", "open-messages-folder"]) { $(id).disabled = aggregate; $(id).title = aggregate ? "Choose a project first" : ""; }
+}
+
 function setProject(name, syncTicketRoute = true) {
+  if (name !== ALL_PROJECTS && !projects.some(project => project.name === name)) return;
   activeProject = name;
   store(STORAGE.project, name);
   refreshGeneration += 1;
@@ -93,6 +122,17 @@ function setProject(name, syncTicketRoute = true) {
   selectedIds = selectionClear(); selectionAnchor = null; selectedMessage = null; selectedMessageValue = null;
   dataVersion = null;
   selectedTicket = null; ticketDetailSignature = "";
+  selectedRoadmap = null; roadmapDetailSignature = "";
+  initialized = false; pendingMessageIds.clear(); deferredMessagePage = null;
+  $("roadmap-form").classList.add("hidden"); $("ticket-form").classList.add("hidden");
+  document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
+  state = {...emptyState};
+  $("message-detail").className = "detail-panel empty";
+  $("message-detail").innerHTML = '<div><h2>Your next conversation</h2><p>Select a message to read, reply, or acknowledge.</p></div>';
+  populateChoices(); renderBacklog(); renderPresence(); renderMessages(); renderRoadmap(); renderTickets();
+  renderProjectSwitcher(); renderProjectOverview();
+  const url = new URL(location.href); url.searchParams.set("project", name); url.searchParams.delete("message"); url.searchParams.delete("ticket");
+  if (syncTicketRoute) { url.pathname = "/"; history.replaceState(null, "", url); }
   if (syncTicketRoute && currentView === "tickets") history.replaceState(null, "", ticketUrl(null));
   return refresh();
 }
@@ -200,6 +240,8 @@ async function api(path, init={}) {
 function staleError() { return Object.assign(new Error("superseded request"), {stale: true}); }
 
 function setConnection(mode) {
+  $("refresh-notice").hidden = mode === "Live";
+  $("refresh-notice").textContent = mode === "Offline" ? "Connection unavailable. Showing the last available update; retrying automatically." : "Connecting to your workspace…";
   const node = $("connection");
   if (node.dataset.mode === mode) return;
   node.dataset.mode = mode;
@@ -259,29 +301,32 @@ const VIEWS = ["messages","roadmap","tickets","presence"];
 function setView(name, {focus=false}={}) {
   if (!VIEWS.includes(name)) name = "messages";
   currentView = name;
+  document.body.dataset.view = name;
   store(STORAGE.view, name);
   for (const view of VIEWS) {
     $(`view-${view}`).hidden = view !== name;
     $(`nav-${view}`).setAttribute("aria-selected", String(view === name));
+    $(`nav-${view}`).tabIndex = view === name ? 0 : -1;
   }
   if (parseTicketRoute()) {
     const url = new URL(location.href); url.hash = "";
     if (name !== "tickets") { url.pathname = "/"; url.searchParams.set("view", name); url.searchParams.set("project", activeProjectName()); }
     history.replaceState(null, "", url);
-  } else if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
+  } else { const url = new URL(location.href); url.hash = name; url.searchParams.set("view", name); if (activeProject) url.searchParams.set("project", activeProject); history.replaceState(null, "", url); }
   if (focus) $(`nav-${name}`).focus();
 }
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   $("theme-toggle").textContent = theme === "dark" ? "Light theme" : "Dark theme";
-  $("theme-toggle").setAttribute("aria-pressed", String(theme === "light"));
+  $("mobile-theme-toggle").textContent = theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
+  $("theme-toggle").title = `Switch to ${theme === "dark" ? "light" : "dark"} theme`;
   store(STORAGE.theme, theme);
 }
 
 function initTheme() {
   const stored = store(STORAGE.theme);
-  applyTheme(stored === "light" || stored === "dark" ? stored : (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"));
+  applyTheme(stored === "light" || stored === "dark" ? stored : "light");
 }
 
 function renderBacklog() {
@@ -526,11 +571,12 @@ async function acknowledgeSelected() {
 }
 
 async function showMessage(id) {
+  const project = messageProject(id);
   selectedMessage = id; selectedMessageValue = null; selectedThread = null; renderMessages();
   const detail = $("message-detail"); detail.className = "detail-panel"; detail.innerHTML = '<p class="quiet">Loading message…</p>';
   try {
-    const [value, thread] = await Promise.all([api(withProject(`/api/messages/${encodeURIComponent(id)}`, messageProject(id))), api(withProject(`/api/messages/${encodeURIComponent(id)}/thread`, messageProject(id))).catch(() => null)]);
-    if (selectedMessage !== id) return;
+    const [value, thread] = await Promise.all([api(withProject(`/api/messages/${encodeURIComponent(id)}`, project)), api(withProject(`/api/messages/${encodeURIComponent(id)}/thread`, project)).catch(() => null)]);
+    if (selectedMessage !== id || project !== activeProjectName()) return;
     selectedMessageValue = value; selectedThread = thread;
     detail.innerHTML = messageDetailMarkup(value); reconcileMessageDetail(value); renderThread(thread); updateVisibleTimes();
     $("copy-body").onclick = () => copyMessageBody(value.message.id);
@@ -540,7 +586,7 @@ async function showMessage(id) {
     if ($("message-open-ticket")) $("message-open-ticket").onclick = async () => { const project = messageProject(value.message.id); if (project !== activeProjectName()) await setProject(project, false); setView("tickets"); selectTicket(value.message.ticket_id); };
     if ($("ack-message")) $("ack-message").onclick = acknowledgeSelected;
     revealOnMobile(detail);
-  } catch (error) { if (selectedMessage !== id) return; detail.innerHTML = `<p class="error">${escapeText(error.message)}</p>`; }
+  } catch (error) { if (selectedMessage !== id || project !== activeProjectName()) return; detail.innerHTML = `<p class="error">${escapeText(error.message)}</p>`; }
 }
 
 // ---------- roadmap ----------
@@ -679,15 +725,16 @@ function renderOverview(container) {
   const milestoneMarkup = milestones.length ? milestones.map(item => {
     const d = derived(item);
     return `<article class="milestone"><header><button type="button" data-select="${escapeText(item.id)}">${escapeText(item.title)}</button>${tagMarkup(d.kind, "fill-violet")}${pillMarkup(item.status)}<span class="raw">${escapeText(item.id)}</span><span class="raw">${escapeText(actorText(item.owner))}</span></header>${d.impact ? `<p class="impact"><b>Impact</b> · ${escapeText(d.impact)}</p>` : '<p class="impact quiet">No impact line recorded.</p>'}${aggregateMarkup(item)}${d.aggregate && d.aggregate.open.length ? `<div class="members"><span class="label">Open</span>${d.aggregate.open.map(id => itemChip(id, byId)).join("")}</div>` : ""}</article>`;
-  }).join("") : `<div class="ov-hint">No item is declared as a MILESTONE or OBJECTIVE yet. Declare one with its members, then this card aggregates their own progress (nothing is invented):<code>python -B tools/agent_board.py roadmap annotate --actor claude-master --id TRAIN_A --kind MILESTONE --depends-on A2_G1_DVT_V2_INDEPENDENT_RESOLUTION --depends-on A2_G2_FER_V1 --impact "first Train A candidate resolved on untouched history"</code></div>`;
+  }).join("") : `<div class="ov-hint">Give the team a shared destination. Add a milestone to track progress toward your next delivery.<br><button type="button" class="secondary" data-new-milestone>New milestone</button></div>`;
   const ownerMarkup = owners.length ? `<div class="owner-groups">${owners.map(([owner, items]) => `<section class="owner-group"><header><span>${actorMarkup(owner)}</span><span class="quiet">${items.length}</span></header><div class="chips">${items.map(item => itemChip(item.id, byId)).join("")}</div></section>`).join("")}</div>` : '<p class="ov-empty">Nothing is actionable without an open dependency or blocker.</p>';
   container.innerHTML = `
-    <section class="panel ov-card wide-card" data-focus="milestones"><header><h2>Milestones &amp; objectives <span class="count">${milestones.length}</span></h2><p class="rule">Aggregate of members (children + dependencies): mean of reported progress, closed / total. Members that reported nothing are not counted.</p></header>${milestoneMarkup}</section>
-    <section class="panel ov-card" data-focus="startable"><header><h2>Ready to start <span class="count">${startable.length}</span></h2><p class="rule">NOT_STARTED, no blocker, no unresolved dependency.</p></header><div class="ov-list">${startable.length ? startable.map(item => overviewRow(item, `${escapeText(actorText(item.owner))}${derived(item).feeds.length ? ` · feeds <b>${escapeText(derived(item).feeds.join(", "))}</b>` : ""}`)).join("") : '<p class="ov-empty">Nothing is ready to start.</p>'}${waiting.length ? `<p class="ov-empty">${waiting.length} not-started item${waiting.length === 1 ? " waits" : "s wait"} on an open dependency: ${waiting.map(item => `<button type="button" class="link-button" data-select="${escapeText(item.id)}">${escapeText(item.title)}</button>`).join(", ")}</p>` : ""}</div></section>
-    <section class="panel ov-card" data-focus="standby"><header><h2>In standby <span class="count">${standby.length}</span></h2><p class="rule">IN_PROGRESS with no update for ${standbyHours()} h or more, or explicitly flagged.</p></header><div class="ov-list">${standby.length ? standby.map(item => { const s = derived(item).standby; return overviewRow(item, `${s.kind === "explicit" ? `<b>flagged</b> by ${escapeText(s.set_by || "?")} · ${escapeText(s.reason)}` : `<b>${escapeText(ageLabel(s.age_hours))}</b> without update`} · ${escapeText(actorText(item.owner))}`, `${item.progress_reported ? `${item.progress} %` : "—"}`); }).join("") : '<p class="ov-empty">Every in-progress item moved recently.</p>'}</div></section>
-    <section class="panel ov-card" data-focus="blocked"><header><h2>Blocked <span class="count">${blocked.length}</span></h2><p class="rule">The blocker text is the fact; dependencies still open are listed beside it.</p></header><div class="ov-list">${blocked.length ? blocked.map(entry => overviewRow(entry.item, `${entry.blockers.map(text => `<b>${escapeText(text)}</b>`).join(" · ") || '<span class="quiet">no blocker text</span>'}${entry.waiting_on.length ? ` · waits on ${entry.waiting_on.map(id => `<button type="button" class="link-button" data-select="${escapeText(id)}">${escapeText(byId.get(id)?.title || id)}</button>`).join(", ")}` : ""} · ${escapeText(actorText(entry.item.owner))}`)).join("") : '<p class="ov-empty">Nothing is blocked.</p>'}</div></section>
-    <section class="panel ov-card wide-card" data-focus="parallel"><header><h2>Can run in parallel now <span class="count">${views.parallel.items.length}</span></h2><p class="rule">Actionable (in progress, ready, or ready to start) with no blocker and no open dependency: none of these waits on another. Grouped by owner, since one owner is one queue.</p></header>${ownerMarkup}</section>`;
+    <section class="panel ov-card wide-card" data-focus="milestones"><header><h2>Milestones &amp; objectives <span class="count">${milestones.length}</span></h2><p class="rule">Progress toward your shared goals.</p></header>${milestoneMarkup}</section>
+    <section class="panel ov-card" data-focus="startable"><header><h2>Ready to start <span class="count">${startable.length}</span></h2><p class="rule">Clear to begin, with dependencies resolved.</p></header><div class="ov-list">${startable.length ? startable.map(item => overviewRow(item, `${escapeText(actorText(item.owner))}${derived(item).feeds.length ? ` · feeds <b>${escapeText(derived(item).feeds.join(", "))}</b>` : ""}`)).join("") : '<p class="ov-empty">Nothing is ready to start.</p>'}${waiting.length ? `<p class="ov-empty">${waiting.length} not-started item${waiting.length === 1 ? " waits" : "s wait"} on an open dependency: ${waiting.map(item => `<button type="button" class="link-button" data-select="${escapeText(item.id)}">${escapeText(item.title)}</button>`).join(", ")}</p>` : ""}</div></section>
+    <section class="panel ov-card" data-focus="standby"><header><h2>In standby <span class="count">${standby.length}</span></h2><p class="rule">Paused or quiet for ${standbyHours()} hours.</p></header><div class="ov-list">${standby.length ? standby.map(item => { const s = derived(item).standby; return overviewRow(item, `${s.kind === "explicit" ? `<b>flagged</b> by ${escapeText(s.set_by || "?")} · ${escapeText(s.reason)}` : `<b>${escapeText(ageLabel(s.age_hours))}</b> without update`} · ${escapeText(actorText(item.owner))}`, `${item.progress_reported ? `${item.progress} %` : "—"}`); }).join("") : '<p class="ov-empty">Every in-progress item moved recently.</p>'}</div></section>
+    <section class="panel ov-card" data-focus="blocked"><header><h2>Blocked <span class="count">${blocked.length}</span></h2><p class="rule">Dependencies that need a decision or a hand.</p></header><div class="ov-list">${blocked.length ? blocked.map(entry => overviewRow(entry.item, `${entry.blockers.map(text => `<b>${escapeText(text)}</b>`).join(" · ") || '<span class="quiet">no blocker text</span>'}${entry.waiting_on.length ? ` · waits on ${entry.waiting_on.map(id => `<button type="button" class="link-button" data-select="${escapeText(id)}">${escapeText(byId.get(id)?.title || id)}</button>`).join(", ")}` : ""} · ${escapeText(actorText(entry.item.owner))}`)).join("") : '<p class="ov-empty">Nothing is blocked.</p>'}</div></section>
+    <section class="panel ov-card wide-card" data-focus="parallel"><header><h2>Can run in parallel now <span class="count">${views.parallel.items.length}</span></h2><p class="rule">Independent work, grouped by owner.</p></header>${ownerMarkup}</section>`;
   container.querySelectorAll("[data-select]").forEach(button => button.addEventListener("click", () => selectRoadmap(button.dataset.select)));
+  container.querySelector("[data-new-milestone]")?.addEventListener("click", () => { openRoadmap(); $("roadmap-kind").value = "MILESTONE"; });
 }
 
 function createTreeRow() {
@@ -848,7 +895,7 @@ function renderTimeline(panel) {
 
 function renderRoadmap() {
   // The roadmap is never merged across projects: say which store this view reads.
-  $("roadmap-project").textContent = multiProject() ? activeProjectName() : "";
+  $("roadmap-project").textContent = multiProject() && activeProject !== ALL_PROJECTS ? activeProjectName() : "";
   const payload = treePayload();
   const errorNode = $("roadmap-tree-error");
   errorNode.classList.toggle("hidden", !payload.error);
@@ -974,7 +1021,7 @@ function ticketBlockerMarkup(item) {
   return `<div class="ticket-blocker-banner"><strong>Waiting on ${blockers.length} blocking ${blockers.length === 1 ? "ticket" : "tickets"}</strong><span>${blockers.map(({id, ticket}) => `<a href="${escapeText(ticketUrl(id).href)}">${escapeText(ticket?.display_id || id)}${ticket ? ` · ${escapeText(ticket.title)}` : ' · dependency unavailable'}</a>`).join("<br>")}</span></div>`;
 }
 
-function ticketActingActors() { return [...new Set(["operator", "lead", ...state.choices.identities])]; }
+function ticketActingActors() { return [...new Set(["operator", "lead", ...state.choices.identities, ...(state.actors || []).map(actor => actor.name), ...state.tickets.map(ticket => ticket.assignee).filter(Boolean)])]; }
 
 function updateTicketCreatePermission() {
   const allowed = state.choices.identities.includes($("ticket-actor").value);
@@ -1106,10 +1153,18 @@ function ticketActivityMarkup(item) {
   return `<div class="ticket-timeline">${entries.map(entry => `<article class="ticket-event"><span class="ticket-avatar" aria-hidden="true">${escapeText(ticketActorLabel(entry.actor).slice(0, 1))}</span><div class="ticket-event-content"><header>${ticketAuthorMarkup(entry.actor)}<span class="quiet">${entry.kind === "comment" ? "commented" : entry.kind === "review" ? "reviewed" : "logged work"}</span>${timeMarkup(entry.ts, true)}</header>${entry.verdict ? `<p>${tagMarkup(entry.verdict, entry.verdict === "FAIL" ? "red" : "green")}</p>` : ""}<div class="markdown-body">${ticketCommentMarkup(entry)}</div>${entry.findings?.length ? `<ul>${entry.findings.map(finding => `<li>${escapeText(finding)}</li>`).join("")}</ul>` : ""}${entry.evidence ? `<dl class="ticket-evidence">${Object.entries(entry.evidence).map(([key, value]) => `<dt>${escapeText(key)}</dt><dd>${escapeText(String(value))}</dd>`).join("")}</dl>` : ""}</div></article>`).join("")}</div>`;
 }
 
+function ticketNextStepMarkup(item) {
+  const latest = [...(item.comments || [])].sort((a, b) => b.ts.localeCompare(a.ts) || (b.seq || 0) - (a.seq || 0))[0];
+  const nextActor = item.stage === "QA" ? item.reviewer : item.assignee;
+  const action = {BACKLOG:"Ready to scope",ANALYSIS:"Define the work",DEVELOPMENT:"In development",QA:"Ready for review",INTEGRATION:"Ready to integrate",BLOCKED:"Waiting on a blocker",DONE:"Work completed",CANCELLED:"Work cancelled"}[item.stage] || statusLabel(item.stage);
+  return `<section class="ticket-next-step" aria-label="Current next step"><div><span class="label">Next step</span><strong>${escapeText(action)}</strong></div><span>${escapeText(ticketActorLabel(nextActor))}</span></section>${latest ? `<section class="latest-update"><div class="latest-update-heading"><h3>Latest update</h3>${timeMarkup(latest.ts, true)}</div><div class="markdown-body">${ticketCommentMarkup(latest)}</div><span class="quiet">${escapeText(ticketActorLabel(latest.actor))}</span></section>` : ""}`;
+}
+
 function renderTicketDetail() {
   const detail = $("ticket-detail");
   const byId = ticketsById();
   const item = selectedTicket ? byId.get(selectedTicket) : null;
+  document.body.classList.toggle("ticket-open", Boolean(item));
   $("ticket-panel").hidden = Boolean(item);
   detail.hidden = !item;
   if (!item) { detail.innerHTML = ""; detail.dataset.ticketId = ""; return; }
@@ -1122,7 +1177,7 @@ function renderTicketDetail() {
   const openDialog = sameTicket ? detail.querySelector("dialog[open]")?.id : null;
   const focused = sameTicket && detail.contains(document.activeElement) ? document.activeElement : null;
   const focusState = focused ? {id: focused.id, start: focused.selectionStart, end: focused.selectionEnd} : null;
-  const descriptionOpen = sameTicket ? detail.querySelector(".ticket-description")?.open : item.body.length < 1200;
+  const descriptionOpen = sameTicket ? detail.querySelector(".ticket-description")?.open : false;
   detail.dataset.ticketId = item.id;
   detail.className = "detail-panel ticket-issue";
   const identities = ticketActingActors();
@@ -1131,7 +1186,7 @@ function renderTicketDetail() {
   detail.innerHTML = `<div class="ticket-breadcrumb"><button id="ticket-back" type="button" class="ghost">← Tickets</button><span>/</span><span class="ticket-project-name">${escapeText(activeProjectName() || "Project")}</span><span>/</span><button id="ticket-copy-id" type="button" class="ghost mono" title="Copy ticket ID">${escapeText(item.display_id || item.id)}</button><button id="ticket-copy-link" type="button" class="ghost">Copy link</button><button id="ticket-copy-md" type="button" class="ghost ticket-export">Copy Markdown</button></div>
     <header class="ticket-issue-head"><div class="badges">${ticketStagePill(item.stage)}${tagMarkup(item.kind)}</div><h2>${escapeText(item.title)}</h2><div class="ticket-command-bar"><button id="ticket-reply" type="button" class="secondary">Comment</button><button id="ticket-review-open" type="button" class="secondary">Record review</button><button id="ta-done" type="button" class="ghost">✓ Mark done</button><label class="ticket-acting">Acting as <select id="ta-actor" aria-label="Acting identity">${identities.map(id => `<option value="${escapeText(id)}" ${id === "operator" ? "selected" : ""}>${escapeText(ticketActorLabel(id))}</option>`).join("")}</select></label></div></header>
     <p id="ticket-action-permission" class="quiet ticket-permission-note"></p>${ticketBlockerMarkup(item)}<p id="ta-error" class="error" role="alert"></p>
-    <div class="ticket-issue-grid"><div class="ticket-main">
+    <div class="ticket-issue-grid"><div class="ticket-main">${ticketNextStepMarkup(item)}
       ${item.summary ? `<p class="ticket-summary">${escapeText(item.summary)}</p>` : ""}
       ${item.body ? `<details class="ticket-description" ${descriptionOpen ? "open" : ""}><summary>Description <span class="quiet">${item.body.length >= 1200 ? "Full context" : ""}</span></summary><div class="markdown-body">${renderMarkdown(item.body)}</div></details>` : ""}
       ${item.acceptance_criteria.length ? `<section class="ticket-criteria"><h3>Acceptance criteria</h3><ul>${item.acceptance_criteria.map(text => `<li>${escapeText(text)}</li>`).join("")}</ul></section>` : ""}
@@ -1150,9 +1205,12 @@ function renderTicketDetail() {
     </aside></div>
     <dialog id="ticket-assign-dialog" class="ticket-dialog" aria-labelledby="ticket-assign-title"><form id="ticket-assign-form"><div class="dialog-head"><h2 id="ticket-assign-title">Assign ticket</h2><button type="button" class="ghost" data-close-ticket-dialog>Close</button></div><p class="muted">Assign an owner and start their work lease.</p><div class="form-grid"><label class="wide">Assignee<input id="ta-assignee" maxlength="128" value="${escapeText(item.assignee || "")}" placeholder="${escapeText(identities[0] || "master")}/worker" required></label></div><p id="ta-assign-error" class="error" role="alert"></p><div class="form-actions"><button id="ta-assign" type="submit" class="primary">Assign & start lease</button></div></form></dialog>
     <dialog id="ticket-review-dialog" class="ticket-dialog" aria-labelledby="ticket-review-title"><form id="ticket-review-form"><div class="dialog-head"><h2 id="ticket-review-title">Record a review</h2><button type="button" class="ghost" data-close-ticket-dialog>Close</button></div><p class="muted">A passing review is required before completion.</p><div class="form-grid"><label class="wide">Verdict<select id="ta-verdict"><option value="PASS">Pass</option><option value="CONFIRMED_WITH_FIXES">Confirmed with fixes</option><option value="FAIL">Changes requested</option></select></label><label class="wide">Review summary<input id="ta-review-summary" maxlength="300" required></label><label class="wide">Findings <small>One per line; required for fixes or changes requested</small><textarea id="ta-findings" rows="4"></textarea></label></div><p id="ta-review-error" class="error" role="alert"></p><div class="form-actions"><button id="ta-review" type="submit" class="primary">Save review</button></div></form></dialog>`;
+  detail.querySelector(".ticket-command-bar").insertAdjacentHTML("afterbegin", '<button id="ticket-claim" type="button" class="primary">Claim work</button><button id="ticket-handoff-open" type="button" class="primary">Deliver work</button>');
+  detail.insertAdjacentHTML("beforeend", `<dialog id="ticket-handoff-dialog" class="ticket-dialog" aria-labelledby="ticket-handoff-title"><form id="ticket-handoff-form"><div class="dialog-head"><h2 id="ticket-handoff-title">Deliver work</h2><button type="button" class="ghost" data-close-ticket-dialog>Close</button></div><p class="muted">Share the result, evidence, and who takes the next step.</p><div class="form-grid"><label>Next step<select id="th-stage"><option value="QA">Ready for review</option><option value="INTEGRATION">Ready to integrate</option></select></label><label>Next owner<input id="th-next-actor" required maxlength="128" value="${escapeText(item.reviewer || "")}"></label><label>Result summary<input id="th-summary" required maxlength="300" placeholder="What changed and what it means"></label><label>Delivery notes<textarea id="th-body" required maxlength="32768" rows="4" placeholder="Result, remaining blockers, and the next action"></textarea></label><label>Evidence type<select id="th-evidence-type"><option value="test">Test result</option><option value="commit">Git commit</option><option value="artifact">Artifact</option></select></label><label><span id="th-pointer-label">Test command</span><input id="th-pointer" required maxlength="2000"></label><label><span id="th-proof-label">Exit code</span><input id="th-proof" required type="number" value="0"></label></div><p id="th-error" class="error" role="alert"></p><div class="form-actions"><button id="th-submit" type="submit" class="primary">Send delivery</button></div></form></dialog>`);
+  $("th-evidence-type").onchange = () => { const kind = $("th-evidence-type").value; $("th-pointer-label").textContent = {test:"Test command",commit:"Repository path",artifact:"Artifact path"}[kind]; $("th-proof-label").textContent = {test:"Exit code",commit:"Commit SHA",artifact:"Content hash"}[kind]; $("th-proof").type = kind === "test" ? "number" : "text"; $("th-proof").value = kind === "test" ? "0" : ""; };
   $("ticket-back").onclick = () => { const previous = selectedTicket; selectedTicket = null; ticketDetailSignature = ""; history.pushState(null, "", ticketUrl(null)); renderTickets(); [...$("ticket-panel").querySelectorAll(".card")].find(card => card.dataset.id === previous)?.focus(); };
   $("ticket-reply").onclick = () => { $("ta-comment").scrollIntoView({block: "center"}); $("ta-comment").focus({preventScroll: true}); };
-  for (const kind of ["assign", "review"]) {
+  for (const kind of ["assign", "review", "handoff"]) {
     const dialog = $(`ticket-${kind}-dialog`);
     const opener = $(`ticket-${kind}-open`);
     opener.onclick = () => dialog.showModal();
@@ -1160,6 +1218,8 @@ function renderTicketDetail() {
     dialog.addEventListener("close", () => opener.focus({preventScroll: true}));
   }
   detail.querySelectorAll("input, select, textarea").forEach(node => { node.dataset.initialValue = node.value; });
+  const evidenceDraft = draft.find(([id]) => id === "th-evidence-type");
+  if (evidenceDraft) { $("th-evidence-type").value = evidenceDraft[1]; $("th-evidence-type").onchange(); }
   for (const [id, value] of draft) if ($(id)) $(id).value = value;
   if (openDialog) $(openDialog).showModal();
   if (focusState && $(focusState.id)) {
@@ -1180,23 +1240,35 @@ function renderTicketDetail() {
     const owner = item.reviewer || (item.assignee || actor()).split("/")[0];
     const reviewAllowed = master && actor().split("/")[0] === owner.split("/")[0];
     const leaseAllowed = item.lease?.assignee === actor();
+    const claimAllowed = !TICKET_TERMINAL.has(item.stage) && (!item.assignee || item.assignee === actor()) && (!item.lease || item.lease_stale);
+    $("ticket-claim").hidden = !claimAllowed;
+    $("ticket-claim").textContent = item.lease_stale ? "Recover expired lease" : "Claim work";
+    const handoffAllowed = leaseAllowed && !item.lease_stale && !TICKET_TERMINAL.has(item.stage);
+    $("ticket-handoff-open").hidden = !handoffAllowed;
     for (const id of ["ticket-assign-open", "ta-assign", "ta-transition", "ta-stage", "ta-done"]) {
       $(id).disabled = !master; $(id).title = master ? "" : "Requires a master role";
     }
     for (const id of ["ticket-review-open", "ta-review"]) { $(id).disabled = !reviewAllowed; $(id).title = reviewAllowed ? "" : "Only the ticket's owning master can record a review"; }
     $("ta-heartbeat").disabled = !leaseAllowed; $("ta-heartbeat").title = leaseAllowed ? "" : "Only the current lease assignee can renew it";
-    $("ticket-action-permission").textContent = !master ? "You can comment as this identity. Assignment, stage changes, reviews and completion require the appropriate master; lease renewal requires its assignee." : !reviewAllowed ? "Reviews are reserved for this ticket's owning master. Lease renewal is reserved for its assignee." : "Lease renewal is reserved for its current assignee.";
+    $("ticket-action-permission").textContent = !master && !handoffAllowed && !claimAllowed ? "Commenting as this identity. Work actions are available to the assigned owner." : "";
   };
   $("ta-actor").onchange = updatePermissions;
   updatePermissions();
   const perform = async (button, action, body, errorId = "ta-error", onSuccess = () => {}) => {
+    const project = activeProjectName();
     $(errorId).textContent = ""; button.disabled = true;
-    try { await ticketAction(item.id, action, {actor: actor(), ...body}); onSuccess(); await refresh(); }
-    catch (error) { $(errorId).textContent = error.message; }
+    try { await ticketAction(item.id, action, {actor: actor(), expected_revision: item.revision, ...body}); if (project !== activeProjectName() || !button.isConnected) return; onSuccess(); await refresh(); }
+    catch (error) { if (project === activeProjectName() && button.isConnected && $(errorId)) $(errorId).textContent = error.message; }
     finally { if (button.isConnected) { button.disabled = false; updatePermissions(); } }
   };
+  $("ticket-claim").onclick = () => perform($("ticket-claim"), "claim", {recover: Boolean(item.lease_stale)});
+  $("ticket-handoff-form").onsubmit = event => {
+    event.preventDefault(); const kind = $("th-evidence-type").value, pointer = $("th-pointer").value.trim(), proof = $("th-proof").value.trim();
+    const evidence = kind === "test" ? {test: pointer, exit_code: Number(proof)} : kind === "commit" ? {repo: pointer, sha: proof} : {artifact: pointer, content_hash: proof};
+    perform($("th-submit"), "handoff", {stage: $("th-stage").value, next_actor: $("th-next-actor").value.trim(), summary: $("th-summary").value.trim(), body: $("th-body").value.trim(), evidence, ...(item.lease?.token ? {lease_token: item.lease.token} : {})}, "th-error", () => $("ticket-handoff-dialog").close());
+  };
   $("ticket-assign-form").onsubmit = event => { event.preventDefault(); perform($("ta-assign"), "assign", {assignee: $("ta-assignee").value}, "ta-assign-error", () => $("ticket-assign-dialog").close()); };
-  $("ta-heartbeat").onclick = () => perform($("ta-heartbeat"), "heartbeat", {});
+  $("ta-heartbeat").onclick = () => perform($("ta-heartbeat"), "heartbeat", {...(item.lease?.token ? {lease_token: item.lease.token} : {})});
   $("ta-transition").onclick = () => { if ($("ta-stage").value) perform($("ta-transition"), "transition", {stage: $("ta-stage").value}); };
   $("ta-comment-btn").onclick = () => {
     const body = $("ta-comment").value.trim(); const summary = body.split("\n")[0].slice(0, 300);
@@ -1230,8 +1302,10 @@ function parseTicketRoute() {
 }
 
 async function openTicketRoute(route) {
+  const previousProject = activeProjectName();
   try {
     const value = await api(withProject(`/api/tickets/resolve/${encodeURIComponent(route.ref)}`, route.project));
+    if (activeProjectName() !== previousProject) return;
     if (value.project && value.project !== activeProjectName()) await setProject(value.project, false);
     const item = value.ticket;
     state.tickets = state.tickets.some(ticket => ticket.id === item.id) ? state.tickets.map(ticket => ticket.id === item.id ? item : ticket) : [...state.tickets, item];
@@ -1251,7 +1325,7 @@ window.addEventListener("popstate", async () => {
   if (friendly) { await openTicketRoute(friendly); return; }
   const route = new URL(location.href);
   const project = route.searchParams.get("project");
-  if (project && project !== activeProjectName() && projects.some(item => item.name === project)) await setProject(project, false);
+  if (project && project !== activeProjectName() && (project === ALL_PROJECTS || projects.some(item => item.name === project))) await setProject(project, false);
   setView(route.searchParams.get("view") || route.hash.slice(1) || "messages");
   if (currentView === "tickets") { selectedTicket = route.searchParams.get("ticket"); ticketDetailSignature = ""; renderTickets(); }
   else if (currentView === "messages" && route.searchParams.get("message")) showMessage(route.searchParams.get("message"));
@@ -1271,7 +1345,7 @@ function renderTickets() {
   updateVisibleTimes();
 }
 
-function openTicketForm() { ticketFormOpener = document.activeElement; $("ticket-form").classList.remove("hidden"); $("ticket-form-error").textContent = ""; $("ticket-form").reset(); $("ticket-actor").value = "operator"; updateTicketCreatePermission(); $("ticket-form").scrollIntoView({block: "nearest"}); $("ticket-title").focus(); }
+function openTicketForm() { if(activeProject===ALL_PROJECTS)return; ticketFormOpener = document.activeElement; $("ticket-form").classList.remove("hidden"); $("ticket-form-error").textContent = ""; $("ticket-form").reset(); $("ticket-actor").value = "operator"; updateTicketCreatePermission(); $("ticket-form").scrollIntoView({block: "nearest"}); $("ticket-title").focus(); }
 function closeTicketForm() { $("ticket-form").classList.add("hidden"); (ticketFormOpener?.isConnected ? ticketFormOpener : $("new-ticket"))?.focus(); ticketFormOpener = null; }
 
 // ---------- refresh loop ----------
@@ -1291,12 +1365,12 @@ async function refresh(){
     }else{deferredMessagePage=null;pendingMessageIds.clear();}
     knownMessageIds=nextIds;state={...emptyState,...next};initialized=true;refreshFailures=0;lastUpdated=new Date();setConnection("Live");
     selectedIds=selectionPrune(selectedIds,nextIds);if(!selectedIds.has(selectionAnchor))selectionAnchor=null;
-    populateChoices();renderBacklog();renderPresence();renderMessages();reconcileMessageDetail(selectedMessageValue);renderRoadmap();renderTickets();updateVisibleTimes();
+    populateChoices();renderBacklog();renderPresence();renderMessages();reconcileMessageDetail(selectedMessageValue);renderRoadmap();renderTickets();renderProjectOverview();updateVisibleTimes();
   }catch(error){if(error.stale||generation!==refreshGeneration)return;refreshFailures+=1;setConnection(refreshFailures>=3?"Offline":"Reconnecting");if(refreshFailures===1||refreshFailures===3)console.warn("Agent board refresh failed",error);}
-  finally{refreshInFlight=false;}
+  finally{if(generation===refreshGeneration)refreshInFlight=false;}
 }
 
-// One project, or every project merged into one inbox. Each project's messages carry their own project name.
+// Project snapshots remain isolated; the portfolio displays counts and explicit entry points.
 async function fetchProjectState(name,signal){
   const value=await api(`/api/state?standby=${encodeURIComponent(standbyHours())}&project=${encodeURIComponent(name)}`,{signal});
   value.messages.forEach(item=>{item.project=value.project||name;});
@@ -1306,9 +1380,9 @@ async function fetchProjectState(name,signal){
 async function fetchBoardState(signal){
   if(activeProject!==ALL_PROJECTS||!multiProject())return fetchProjectState(activeProjectName(),signal);
   const values=await Promise.all(projects.map(item=>fetchProjectState(item.name,signal)));
-  const messages=values.flatMap(value=>value.messages).sort((a,b)=>b.created_at.localeCompare(a.created_at));
-  const meta=values.reduce((sum,value)=>({total:sum.total+value.messages_meta.total,returned:sum.returned+value.messages_meta.returned,has_more:sum.has_more||value.messages_meta.has_more,malformed:sum.malformed+(value.messages_meta.malformed||0),oversized:sum.oversized+(value.messages_meta.oversized||0)}),{total:0,returned:0,has_more:false,malformed:0,oversized:0});
-  return {...values[0],messages,messages_meta:meta,project:ALL_PROJECTS};
+  projectSnapshots=values;
+  const choices=Object.fromEntries(Object.keys(emptyState.choices).map(key=>[key,[...new Set(values.flatMap(value=>value.choices?.[key]||[]))]]));
+  return {...emptyState,choices,project:ALL_PROJECTS};
 }
 
 // Live without a restart: poll the cheap change token, fetch the whole state only when the store actually moved.
@@ -1334,7 +1408,7 @@ function markUiOutdated(){if(uiOutdated)return;uiOutdated=true;$("ui-update").cl
 // ---------- editors ----------
 
 function parseIdList(value){return [...new Set(String(value||"").split(/[\s,;]+/).map(part=>part.trim()).filter(Boolean))];}
-function openRoadmap(item=null){const d=item?derived(item):null;roadmapEditorOpener=document.activeElement;$("roadmap-form").classList.remove("hidden");$("roadmap-form-title").textContent=item?`Update ${item.id}`:"New roadmap item";$("roadmap-error").textContent="";$("roadmap-revision").value=item?.revision??0;$("roadmap-id").value=item?.id??"";$("roadmap-id").disabled=!!item;$("roadmap-title").value=item?.title??"";$("roadmap-summary").value=item?.summary??"";$("roadmap-status").value=item?.status??"NOT_STARTED";$("roadmap-owner").value=item?.owner??"unassigned";$("roadmap-progress").value=item?.progress??0;$("roadmap-blocker").value=item?.blocker??"";$("roadmap-kind").value=d&&d.kind!=="UNKNOWN"?d.kind:"";$("roadmap-depends").value=item?(item.depends_on_ids||[]).join(", "):"";$("roadmap-impact").value=d?.impact??"";$("roadmap-standby").value=item?.standby_flag?.reason??"";$("roadmap-form").dataset.baseline=JSON.stringify(editorExtension());syncRoadmapFields();$("roadmap-form").scrollIntoView({block:"nearest"});(item?$("roadmap-title"):$("roadmap-id")).focus();}
+function openRoadmap(item=null){if(activeProject===ALL_PROJECTS)return;const d=item?derived(item):null;roadmapEditorOpener=document.activeElement;$("roadmap-form").classList.remove("hidden");$("roadmap-form-title").textContent=item?`Update ${item.id}`:"New roadmap item";$("roadmap-error").textContent="";$("roadmap-revision").value=item?.revision??0;$("roadmap-id").value=item?.id??"";$("roadmap-id").disabled=!!item;$("roadmap-title").value=item?.title??"";$("roadmap-summary").value=item?.summary??"";$("roadmap-status").value=item?.status??"NOT_STARTED";$("roadmap-owner").value=item?.owner??"unassigned";$("roadmap-progress").value=item?.progress??0;$("roadmap-blocker").value=item?.blocker??"";$("roadmap-kind").value=d&&d.kind!=="UNKNOWN"?d.kind:"";$("roadmap-depends").value=item?(item.depends_on_ids||[]).join(", "):"";$("roadmap-impact").value=d?.impact??"";$("roadmap-standby").value=item?.standby_flag?.reason??"";$("roadmap-form").dataset.baseline=JSON.stringify(editorExtension());syncRoadmapFields();$("roadmap-form").scrollIntoView({block:"nearest"});(item?$("roadmap-title"):$("roadmap-id")).focus();}
 function editorExtension(){return {kind:$("roadmap-kind").value||null,depends_on:parseIdList($("roadmap-depends").value),impact:$("roadmap-impact").value.trim()||null,standby:$("roadmap-standby").value.trim()||null};}
 // Only the sidecar fields the user changed travel with the POST: an untouched field must not rewrite the sidecar.
 function changedExtension(){const baseline=JSON.parse($("roadmap-form").dataset.baseline||"{}");const current=editorExtension();const out={};for(const key of ["kind","depends_on","impact","standby"])if(JSON.stringify(baseline[key])!==JSON.stringify(current[key]))out[key]=current[key];return out;}
@@ -1387,7 +1461,7 @@ async function populateComposeTickets(preferred = "") {
   } finally { if (generation === composeTicketGeneration) select.disabled = false; }
 }
 
-function openCompose(reply=null){$("compose-form").reset();$("compose-project").value=reply?.project || (reply ? messageProject(reply.id) : activeProjectName());$("compose-result").textContent="";$("reply-to").value="";$("compose-priority").value="NORMAL";const note=$("compose-reply-note");note.classList.toggle("hidden",!reply);if(reply){const defaults=replyDefaults(reply,state.choices.identities);$("reply-to").value=defaults.reply_to;$("compose-actor").value=defaults.actor;$("compose-to").value=defaults.to;$("compose-kind").value=defaults.kind;$("compose-priority").value=defaults.priority;$("compose-workstream").value=defaults.workstream;$("compose-summary").value=defaults.summary;note.textContent=`Replying to ${reply.id} · ${actorText(reply.from)} → ${actorText(reply.to)} · kind defaults to ANSWER (change it if this is not an answer)`;}populateComposeTickets(reply?.ticket_id || "");updateSummaryCounter();$("compose-dialog").showModal();(reply?$("compose-body"):$("compose-summary")).focus();}
+function openCompose(reply=null){if(activeProject===ALL_PROJECTS){toast("Choose a project to compose a message");$("project-picker").focus();return;}$("compose-form").reset();$("compose-project").value=reply?.project || (reply ? messageProject(reply.id) : activeProjectName());$("compose-result").textContent="";$("reply-to").value="";$("compose-priority").value="NORMAL";const note=$("compose-reply-note");note.classList.toggle("hidden",!reply);if(reply){const defaults=replyDefaults(reply,state.choices.identities);$("reply-to").value=defaults.reply_to;$("compose-actor").value=defaults.actor;$("compose-to").value=defaults.to;$("compose-kind").value=defaults.kind;$("compose-priority").value=defaults.priority;$("compose-workstream").value=defaults.workstream;$("compose-summary").value=defaults.summary;note.textContent=`Replying to ${reply.id} · ${actorText(reply.from)} → ${actorText(reply.to)} · kind defaults to ANSWER (change it if this is not an answer)`;}populateComposeTickets(reply?.ticket_id || "");updateSummaryCounter();$("compose-dialog").showModal();(reply?$("compose-body"):$("compose-summary")).focus();}
 
 // ---------- keyboard ----------
 
@@ -1421,9 +1495,42 @@ document.addEventListener("keydown",event=>{
 
 // ---------- wiring ----------
 
+// Keep advanced controls nearby, without making them the first thing people read.
+function setupWorkspaceChrome() {
+  const paths = {messages:'M4 4h16v12h-4l-2 4h-4l-2-4H4z M4 12h4l2 3h4l2-3h4',roadmap:'M5 4v16 M5 7h11 M5 17h11 M16 4v6 M16 14v6',tickets:'M8 5h12v15H4V5h4 M8 3h8v4H8z M8 12h8 M8 16h5',presence:'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M16 4a4 4 0 0 1 0 8 M22 21v-2a4 4 0 0 0-3-3.87 M13 7a4 4 0 1 1-8 0a4 4 0 0 1 8 0'};
+  for (const view of VIEWS) $(`nav-${view}`).insertAdjacentHTML("afterbegin", `<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[view]}"/></svg>`);
+  const signals = document.createElement("details"); signals.className = "rail-insights"; signals.innerHTML = '<summary>Workspace signals<span aria-hidden="true">⌄</span></summary>';
+  const sections = [...document.querySelectorAll(".rail-section")]; sections[0].before(signals); sections.forEach(section => signals.append(section));
+  for (const view of ["messages", "roadmap", "tickets"]) {
+    const toolbar = $(`view-${view}`).querySelector(".toolbar");
+    const disclosure = document.createElement("details"); disclosure.className = "filter-disclosure";
+    const summary = document.createElement("summary"); summary.textContent = "Filters"; disclosure.append(summary);
+    const panel = document.createElement("div"); panel.className = "filter-options"; disclosure.append(panel);
+    [...toolbar.children].filter(node => node.matches("label:not(.sr-only), .toggle") || node.id === "clear-filters").forEach(node => panel.append(node));
+    toolbar.append(disclosure);
+    const search = toolbar.querySelector('input[type="search"]'); if (search) { toolbar.prepend(search); search.placeholder = `Search ${view === "messages" ? "messages" : view}…`; }
+  }
+  $("project-picker").onclick = () => { const open = $("project-menu").hidden; $("project-menu").hidden = !open; $("project-picker").setAttribute("aria-expanded", String(open)); if (open) $("project-options").querySelector('[aria-current="true"]')?.focus(); };
+  $("project-switch").addEventListener("keydown", event => {
+    if (event.key === "Escape") { closeProjectPicker(); $("project-picker").focus(); event.stopPropagation(); }
+    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) && !$("project-menu").hidden) { event.preventDefault(); const buttons = [...$("project-options").querySelectorAll("button")]; const index = buttons.indexOf(document.activeElement); const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length; buttons[next]?.focus(); }
+  });
+  document.addEventListener("click", event => { if (!$("project-switch").contains(event.target)) closeProjectPicker(); document.querySelectorAll(".filter-disclosure[open]").forEach(node => { if (!node.contains(event.target)) node.open = false; }); });
+}
+setupWorkspaceChrome();
+
+document.querySelector(".views").addEventListener("keydown", event => {
+  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  event.preventDefault(); const index = VIEWS.indexOf(currentView);
+  const next = event.key === "Home" ? 0 : event.key === "End" ? VIEWS.length - 1 : (index + (["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : -1) + VIEWS.length) % VIEWS.length;
+  setView(VIEWS[next], {focus: true});
+});
+
 document.querySelectorAll(".views button").forEach(button=>button.addEventListener("click",()=>setView(button.dataset.view)));
-window.addEventListener("hashchange",()=>setView(location.hash.slice(1)));
+window.addEventListener("hashchange",()=>{const view=location.hash.slice(1);if(VIEWS.includes(view))setView(view);});
+document.querySelector(".skip").onclick=event=>{event.preventDefault();$("main").focus();$("main").scrollIntoView({block:"start"});};
 $("theme-toggle").onclick=()=>applyTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
+$("mobile-theme-toggle").onclick=$("theme-toggle").onclick;
 async function loadMessagesFolderPath(){
   try{
     const value=await api(withProject("/api/messages-folder"));
@@ -1439,7 +1546,7 @@ $("open-messages-folder").onclick=async()=>{
     toast("Opened the messages folder in Explorer");
   }catch(error){$("open-messages-folder-result").textContent=error.message||"Could not open the messages folder";}
 };
-$("new-message-pill").onclick=()=>{if(deferredMessagePage){state={...state,...deferredMessagePage};knownMessageIds=new Set(state.messages.map(item=>item.id));deferredMessagePage=null;}pendingMessageIds.clear();renderMessages();$("message-list").scrollTo({top:0,behavior:"smooth"});};
+$("new-message-pill").onclick=()=>{if(deferredMessagePage){state={...state,...deferredMessagePage};knownMessageIds=new Set(state.messages.map(item=>item.id));deferredMessagePage=null;}pendingMessageIds.clear();renderMessages();$("message-list").scrollTo({top:0,behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth"});};
 $("mode-threads").onclick=()=>{listMode="threads";store(STORAGE.lmode,listMode);pruneSelectionToVisible();renderMessages();};$("mode-flat").onclick=()=>{listMode="flat";store(STORAGE.lmode,listMode);pruneSelectionToVisible();renderMessages();};
 $("clear-filters").onclick=()=>{["filter-actor","filter-kind","filter-workstream","filter-priority","filter-ack","search"].forEach(id=>$(id).value="");pruneSelectionToVisible();renderMessages();renderBacklog();};
 ["filter-actor","filter-kind","filter-workstream","filter-priority","filter-ack"].forEach(id=>$(id).addEventListener("change",()=>{pruneSelectionToVisible();renderMessages();renderBacklog();}));

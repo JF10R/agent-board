@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,12 +11,18 @@
   <a class="skip" href="#main">Skip to content</a>
   <div class="shell">
     <aside class="rail" aria-label="Board navigation">
-      <div class="brand"><span class="brand-mark" aria-hidden="true">A</span><span><strong>Agent Board</strong></span></div>
+      <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><span><strong>Agent Board</strong><small>Space to move work forward</small></span></div>
+      <div id="project-switch" class="project-switch">
+        <span class="label">Workspace</span>
+        <button id="project-picker" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="project-menu"><span class="project-symbol" aria-hidden="true">▦</span><span id="project-label">Loading projects…</span><span class="project-chevron" aria-hidden="true">⌄</span></button>
+        <div id="project-menu" class="project-menu" hidden><p class="label">Switch workspace</p><div id="project-options"></div></div>
+        <select id="project-select" aria-label="Project" hidden></select>
+      </div>
       <nav class="views" role="tablist" aria-label="Views">
         <button id="nav-messages" type="button" role="tab" aria-selected="true" aria-controls="view-messages" data-view="messages">Inbox <span id="nav-messages-count" class="rail-count">0</span><kbd>1</kbd></button>
         <button id="nav-roadmap" type="button" role="tab" aria-selected="false" aria-controls="view-roadmap" data-view="roadmap">Roadmap <span id="nav-roadmap-count" class="rail-count">0</span><kbd>2</kbd></button>
         <button id="nav-tickets" type="button" role="tab" aria-selected="false" aria-controls="view-tickets" data-view="tickets">Tickets <span id="nav-tickets-count" class="rail-count">0</span><kbd>3</kbd></button>
-        <button id="nav-presence" type="button" role="tab" aria-selected="false" aria-controls="view-presence" data-view="presence">Masters &amp; leases <span id="nav-presence-count" class="rail-count">0</span><kbd>4</kbd></button>
+        <button id="nav-presence" type="button" role="tab" aria-selected="false" aria-controls="view-presence" data-view="presence">Team <span id="nav-presence-count" class="rail-count">0</span><kbd>4</kbd></button>
       </nav>
       <section class="rail-section" aria-labelledby="backlog-heading">
         <h2 id="backlog-heading" class="label">Awaiting acknowledgement</h2>
@@ -32,18 +38,19 @@
         <div id="connection" class="connection reconnecting" role="status" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span class="connection-label">Reconnecting</span></div>
         <time id="last-updated">No successful refresh yet</time>
         <button id="ui-update" type="button" class="ui-update hidden">New board UI available — reload</button>
-        <div class="rail-actions"><button id="theme-toggle" type="button" aria-pressed="false">Light theme</button><button id="shortcuts-button" type="button">Shortcuts <kbd>?</kbd></button></div>
+        <div class="rail-actions"><button id="theme-toggle" type="button">Light theme</button><button id="shortcuts-button" type="button">Shortcuts <kbd>?</kbd></button></div>
       </div>
     </aside>
-    <main id="main">
+    <main id="main" tabindex="-1">
+      <div class="workspace-context"><span id="scope-label">Workspace</span><span>Private · git-local</span></div>
+      <p id="refresh-notice" class="refresh-notice" role="status">Loading workspace…</p>
       <section id="view-messages" class="view" role="tabpanel" aria-labelledby="nav-messages">
         <header class="view-head">
           <div class="view-head-row">
-            <div><p class="eyebrow">Coordination channel · immutable Markdown messages</p><h1>Inbox <span id="message-count" class="count">0</span></h1></div>
+            <div><p class="eyebrow">Keep the conversation moving</p><h1>Inbox <span id="message-count" class="count">0</span></h1></div>
             <button id="show-compose" type="button" class="primary">Compose <kbd>c</kbd></button>
           </div>
           <div class="toolbar" aria-label="Message filters">
-            <label id="project-switch" class="hidden">Project <select id="project-select"></select></label>
             <label class="sr-only" for="search">Search messages</label>
             <input id="search" type="search" placeholder="Search summary, id, workstream, sender…  ( / )" autocomplete="off">
             <label>Actor <select id="filter-actor"><option value="">all</option></select></label>
@@ -66,7 +73,7 @@
       <section id="view-roadmap" class="view" role="tabpanel" aria-labelledby="nav-roadmap" hidden>
         <header class="view-head">
           <div class="view-head-row">
-            <div><p class="eyebrow">Delivery · board-maintained · derived views</p><h1>Roadmap <span id="roadmap-count" class="count">0</span> <span id="roadmap-project" class="tag"></span></h1></div>
+            <div><p class="eyebrow">A clear path from here to done</p><h1>Roadmap <span id="roadmap-count" class="count">0</span> <span id="roadmap-project" class="tag"></span></h1></div>
             <button id="new-roadmap" type="button" class="secondary">New item</button>
           </div>
           <div class="toolbar" aria-label="Roadmap controls">
@@ -103,7 +110,7 @@
       <section id="view-tickets" class="view" role="tabpanel" aria-labelledby="nav-tickets" hidden>
         <header class="view-head">
           <div class="view-head-row">
-            <div><p class="eyebrow">Stage lifecycle · leases · reviewed completion</p><h1>Tickets <span id="ticket-count" class="count">0</span></h1></div>
+            <div><p class="eyebrow">Good work starts with a clear next step</p><h1>Tickets <span id="ticket-count" class="count">0</span></h1></div>
             <button id="new-ticket" type="button" class="secondary">New ticket</button>
           </div>
           <div class="toolbar" aria-label="Ticket controls">
@@ -125,7 +132,7 @@
       </section>
 
       <section id="view-presence" class="view" role="tabpanel" aria-labelledby="nav-presence" hidden>
-        <header class="view-head"><div class="view-head-row"><div><p class="eyebrow">Who is doing what</p><h1>Masters &amp; leases <span id="presence-summary" class="count"></span></h1></div><div id="presence-strip" class="presence-strip" aria-label="Master presence"></div></div></header>
+        <header class="view-head"><div class="view-head-row"><div><p class="eyebrow">People, ownership, and momentum</p><h1>Team <span id="presence-summary" class="count"></span></h1></div><div id="presence-strip" class="presence-strip" aria-label="Master presence"></div></div></header>
         <div class="panel presence-grid"><div><h2 class="label">Master status</h2><div id="statuses" class="stack"></div></div><div><h2 class="label">Active leases</h2><div id="leases" class="stack"></div></div></div>
       </section>
     </main>
@@ -141,7 +148,7 @@
   <dialog id="shortcuts-dialog" aria-labelledby="shortcuts-heading"><div class="dialog-body">
     <div class="dialog-head"><h2 id="shortcuts-heading">Keyboard shortcuts</h2><button id="close-shortcuts" type="button" class="ghost">Close</button></div>
     <div class="shortcuts"><kbd>1</kbd><span>Inbox</span><kbd>2</kbd><span>Roadmap</span><kbd>3</kbd><span>Tickets</span><kbd>4</kbd><span>Masters &amp; leases</span><kbd>/</kbd><span>Focus search</span><kbd>j</kbd><span>Next item in the list</span><kbd>k</kbd><span>Previous item</span><kbd>Enter</kbd><span>Open the focused item</span><kbd>x</kbd><span>Select / unselect the focused message (Shift-click selects a range)</span><kbd>y</kbd><span>Copy the open message as Markdown (or every selected one)</span><kbd>c</kbd><span>Compose a message</span><kbd>a</kbd><span>Acknowledge the open message (if you are its recipient)</span><kbd>t</kbd><span>Toggle light / dark theme</span><kbd>Esc</kbd><span>Clear the selection, close dialogs</span><kbd>?</kbd><span>This help</span></div>
-    <div class="form-actions"><button id="open-messages-folder" type="button" class="ghost">Open messages folder in Explorer</button></div><p id="open-messages-folder-result" class="quiet" role="status"></p>
+    <div class="form-actions"><button id="mobile-theme-toggle" type="button" class="secondary">Dark theme</button><button id="open-messages-folder" type="button" class="ghost">Open messages folder in Explorer</button></div><p id="open-messages-folder-result" class="quiet" role="status"></p>
   </div></dialog>
 
   <div id="toast" role="status" aria-live="polite"></div>
