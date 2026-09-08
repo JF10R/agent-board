@@ -8,6 +8,9 @@ one transaction across both threads and processes.
 
 from __future__ import annotations
 
+from .errors import BoardError
+from .runtime import discover_git_common_dir as resolve_git_common_dir
+
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from hashlib import sha256
@@ -16,7 +19,6 @@ import os
 from pathlib import Path
 import re
 import sqlite3
-import subprocess
 import time
 import uuid
 from typing import Any
@@ -109,22 +111,11 @@ def utc_now() -> str:
 
 
 def discover_git_common_dir(repo: Path | str | None = None) -> Path:
-    """Resolve Git's shared common directory for a checkout or worktree."""
-
-    cwd = Path(repo or ".").resolve()
-    process = subprocess.run(
-        ["git", "rev-parse", "--git-common-dir"],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-    )
-    if process.returncode != 0:
-        detail = process.stderr.strip() or process.stdout.strip() or "not a Git checkout"
-        raise RoadmapError(f"cannot discover Git common directory: {detail}")
-    value = Path(process.stdout.strip())
-    return (value if value.is_absolute() else cwd / value).resolve()
+    """Resolve the common directory while preserving roadmap error semantics."""
+    try:
+        return resolve_git_common_dir(repo)
+    except BoardError as exc:
+        raise RoadmapError(str(exc)) from exc
 
 
 # Same store-directory rule as agent_board.board_root.
