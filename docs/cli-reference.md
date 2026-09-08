@@ -302,18 +302,20 @@ options:
 ## agent_board.py ticket transition
 
 ```text
-usage: agent_board.py ticket transition [-h] --actor {master} --id TICKET_ID
+usage: agent_board.py ticket transition [-h] --actor ACTOR --id TICKET_ID
                                         --stage {BACKLOG,ANALYSIS,DEVELOPMENT,QA,INTEGRATION,BLOCKED,CANCELLED}
                                         [--expected-revision EXPECTED_REVISION]
                                         [--summary SUMMARY]
+                                        [--lease-token LEASE_TOKEN]
 
 options:
   -h, --help            show this help message and exit
-  --actor {master}
+  --actor ACTOR
   --id TICKET_ID
   --stage {BACKLOG,ANALYSIS,DEVELOPMENT,QA,INTEGRATION,BLOCKED,CANCELLED}
   --expected-revision EXPECTED_REVISION
   --summary SUMMARY
+  --lease-token LEASE_TOKEN
 ```
 
 ## agent_board.py ticket comment

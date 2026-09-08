@@ -937,9 +937,10 @@ def ticket_action(root: Path, ticket_id: str, action: str, payload: Mapping[str,
             expected_revision=_optional_int(value.get("expected_revision"), "expected_revision"),
         )
     if action == "transition":
-        value = _exact_object(payload, {"actor", "stage"}, {"expected_revision", "summary"})
+        value = _exact_object(payload, {"actor", "stage"}, {"expected_revision", "summary", "lease_token"})
         return tickets.transition_ticket(
             root, ticket_id, actor=_string(value["actor"], "actor", 128), stage=_string(value["stage"], "stage", 32),
+            lease_token=_optional_string(value.get("lease_token"), "lease_token", 128, allow_empty=False),
             expected_revision=_optional_int(value.get("expected_revision"), "expected_revision"),
             summary=_string(value["summary"], "summary", 300, allow_empty=True) if "summary" in value else "",
         )

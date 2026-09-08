@@ -385,3 +385,49 @@ def test_partial_dependency_append_can_be_recovered_without_rewriting_prefix(roo
     )
     assert tickets.get_ticket(root, "A")["deps"][0]["target"] == "B"
     assert tickets.get_ticket(root, "B")["deps"][0]["target"] == "A"
+
+
+def test_assigned_developer_starts_with_fenced_lease(root):
+    create(root)
+    claimed = tickets.claim_ticket(root, "T1", actor="gpt-master/dev")
+    for actor, stage, token in [("gpt-master/other", "DEVELOPMENT", claimed["lease"]["token"]),
+                                ("gpt-master/dev", "QA", claimed["lease"]["token"]),
+                                ("gpt-master/dev", "DEVELOPMENT", "wrong")]:
+        with pytest.raises(tickets.TicketConflict):
+            tickets.transition_ticket(root, "T1", actor=actor, stage=stage, lease_token=token)
+    updated = tickets.transition_ticket(root, "T1", actor="gpt-master/dev", stage="DEVELOPMENT",
+                                        lease_token=claimed["lease"]["token"], expected_revision=claimed["revision"])
+    assert updated["stage"] == "DEVELOPMENT"
+    assert tickets._read_ticket_events(root, "T1")[-1]["actor"] == "gpt-master/dev"
+
+
+def test_assigned_developer_starts_with_assignment_lease(root):
+    create(root)
+    assigned = tickets.assign_ticket(root, "T1", actor="gpt-master", assignee="gpt-master/dev")
+    updated = tickets.transition_ticket(root, "T1", actor="gpt-master/dev", stage="DEVELOPMENT",
+                                        expected_revision=assigned["revision"])
+    assert updated["stage"] == "DEVELOPMENT"
+
+
+@pytest.mark.parametrize("condition", ["no_lease", "expired", "blocked", "stale_revision"])
+def test_developer_start_preserves_workflow_guards(root, condition):
+    create(root)
+    if condition == "no_lease":
+        tickets.upsert_ticket(root, "T1", actor="gpt-master", assignee="gpt-master/dev")
+    elif condition == "expired":
+        with patch.object(tickets, "_utc_now", return_value="2020-01-01T00:00:00Z"):
+            tickets.assign_ticket(root, "T1", actor="gpt-master", assignee="gpt-master/dev")
+    else:
+        tickets.assign_ticket(root, "T1", actor="gpt-master", assignee="gpt-master/dev")
+    if condition == "blocked":
+        create(root, "BLOCKER")
+        tickets.add_dependency(root, "T1", actor="gpt-master", dep_type="BLOCKED_BY", target="BLOCKER")
+    with pytest.raises(board.BoardError):
+        tickets.transition_ticket(root, "T1", actor="gpt-master/dev", stage="DEVELOPMENT",
+                                  expected_revision=0 if condition == "stale_revision" else None)
+
+
+def test_transition_parser_accepts_assigned_actor_and_token():
+    args = board.build_parser().parse_args(["ticket", "transition", "--actor", "gpt-master/dev",
+                                           "--id", "T1", "--stage", "DEVELOPMENT", "--lease-token", "fence"])
+    assert args.actor == "gpt-master/dev" and args.lease_token == "fence"

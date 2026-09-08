@@ -1216,11 +1216,12 @@ def _add_ticket_subparsers(subparsers: argparse._SubParsersAction, identities: S
     heartbeat.add_argument("--expected-revision", type=int)
 
     transition = commands.add_parser("transition", help="move a ticket to a new stage (not DONE; see done)")
-    transition.add_argument("--actor", required=True, choices=identities)
+    transition.add_argument("--actor", required=True)
     transition.add_argument("--id", required=True, dest="ticket_id")
     transition.add_argument("--stage", required=True, choices=[s for s in tickets_module.STAGES if s != "DONE"])
     transition.add_argument("--expected-revision", type=int)
     transition.add_argument("--summary", default="")
+    transition.add_argument("--lease-token")
 
     comment = commands.add_parser("comment", help="attach a comment to a ticket")
     comment.add_argument("--actor", required=True)
@@ -1444,7 +1445,7 @@ def _run_ticket_command(args: argparse.Namespace, root: Path) -> None:
     elif command == "transition":
         _print_json(
             tickets_module.transition_ticket(
-                root, args.ticket_id, actor=args.actor, stage=args.stage, expected_revision=args.expected_revision, summary=args.summary
+                root, args.ticket_id, actor=args.actor, stage=args.stage, expected_revision=args.expected_revision, summary=args.summary, lease_token=args.lease_token
             )
         )
     elif command == "comment":

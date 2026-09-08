@@ -89,7 +89,7 @@ Create requires an explicit `id` when a key is supplied.
 | `/api/tickets/<id>/upsert` | Update ticket fields with revision check |
 | `/api/tickets/<id>/assign` | Assign and lease |
 | `/api/tickets/<id>/heartbeat` | Renew current lease |
-| `/api/tickets/<id>/transition` | Change stage |
+| `/api/tickets/<id>/transition` | Change stage; assigned developers may start DEVELOPMENT with an active lease (`lease_token` required for fenced leases) |
 | `/api/tickets/<id>/comment` | Human-readable update |
 | `/api/tickets/<id>/worklog` | Evidence pointer |
 | `/api/tickets/<id>/review` | Owning master's acceptance |

@@ -105,3 +105,18 @@ project-aware command options, choices and supported idempotent operations.
 For a writable checkout with a protected `.git` directory, follow the
 [restricted-context procedure](storage.md#restricted-agent-contexts). The operator
 authorizes the context; the assigned agent remains responsible for its handoff.
+
+
+## Starting assigned development
+
+An assigned developer with an active lease may run `ticket transition --actor
+<assigned-actor> --id <id> --stage DEVELOPMENT --expected-revision <revision>`.
+For a fenced lease created by `ticket claim`, also supply `--lease-token` with
+that lease's token. An ordinary assignment lease does not require a token.
+The HTTP transition action accepts the same optional `lease_token` field.
+
+This does not reassign the ticket. Missing or expired leases, mismatched tokens,
+open blockers, terminal tickets and revision conflicts still prevent starting.
+Non-master actors may only use this transition for their own assigned ticket and
+only target `DEVELOPMENT`. Use `ticket handoff` for delivery to QA with evidence
+and the next responsible actor; formal review and completion remain master actions.

@@ -1345,8 +1345,9 @@ def transition_ticket(
     stage: str,
     expected_revision: int | None = None,
     summary: str = "",
+    lease_token: str | None = None,
 ) -> dict[str, Any]:
-    identity.require_identity(actor, root)
+    actor = _require_actor_name("actor", actor)
     ticket_id = runtime.require_safe_token("ticket id", ticket_id)
     stage = _require_stage(stage)
     if stage == "DONE":
@@ -1357,6 +1358,16 @@ def transition_ticket(
     with _ticket_lock(root):
         state = _require_existing(root, ticket_id)
         _require_revision(state, expected_revision)
+        if actor not in identity.project_config(root)["identities"]:
+            if actor != state.get("assignee") or stage != "DEVELOPMENT":
+                raise TicketConflict("assigned developers may only transition to DEVELOPMENT")
+            if state["stage"] in TERMINAL_STAGES:
+                raise TicketConflict("cannot restart a terminal ticket")
+            lease = state.get("lease")
+            if not lease or state.get("lease_stale"):
+                raise TicketConflict("an active lease is required to start development")
+            if lease.get("fenced") and lease_token != lease.get("token"):
+                raise TicketConflict("lease token mismatch")
         if stage in ACTIVE_STAGES - {"BLOCKED"}:
             blockers = _open_blockers(root, state)
             if blockers:
