@@ -5,3 +5,5 @@
 - A SQLite connection context manages transactions, not connection lifetime. Close disposable connections explicitly so Windows can release or replace their files.
 - Use single-quoted PowerShell here-strings for multiline Python and Markdown. Keep literal backticks and dollar signs out of interpolated shell strings.
 - Validate GitHub-rendered Markdown by element type, allowing attributes such as `role` and `class`; literal opening-tag comparisons can falsely reject valid output.
+
+- Reproduce CI with an editable install: src may already be on sys.path behind the root launcher. Test bootstrap must prioritize it, not merely check membership.
