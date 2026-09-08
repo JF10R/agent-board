@@ -17,6 +17,8 @@ edit this configuration in its runtime directory before launching agents; retain
 at least one identity. `init` does not reset it. Stores with no configuration use
 the fallback `gpt-master` / `claude-master` vocabulary until explicitly initialized.
 Existing project configurations and historical records are not renamed automatically.
+Historical roadmap owners named `sol-master` remain readable when `gpt-master` is
+an allowed owner. New writes require the current configured vocabulary.
 
 The ticket actor registry (`actors.v1.json`) is separate. `actor register master
 --role master` records ticket role and ownership relationships; it does not edit

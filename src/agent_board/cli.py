@@ -742,7 +742,9 @@ def _roadmap_path(root: Path) -> Path:
     return root / "roadmap.v1.json"
 
 
-def _validate_roadmap_item(item: Mapping[str, Any], root: Path | None = None) -> dict[str, Any]:
+def _validate_roadmap_item(
+    item: Mapping[str, Any], root: Path | None = None, *, historical: bool = False
+) -> dict[str, Any]:
     required = {
         "id",
         "title",
@@ -779,7 +781,9 @@ def _validate_roadmap_item(item: Mapping[str, Any], root: Path | None = None) ->
     if status not in ROADMAP_STATUSES:
         raise BoardError(f"invalid roadmap status {status!r}")
     owner = item["owner"]
-    if owner not in project_config(root)["roadmap_owners"]:
+    allowed_owners = project_config(root)["roadmap_owners"]
+    legacy_owner = historical and owner == "sol-master" and "gpt-master" in allowed_owners
+    if owner not in allowed_owners and not legacy_owner:
         raise BoardError(f"invalid roadmap owner {owner!r}")
     progress = item["progress"]
     if isinstance(progress, bool) or not isinstance(progress, int) or not 0 <= progress <= 100:
@@ -835,7 +839,7 @@ def _read_roadmap_store(root: Path, *, migrate_legacy: bool = False) -> dict[str
         if not isinstance(raw_item, dict):
             raise BoardError("roadmap items must be objects")
         try:
-            item = _validate_roadmap_item(raw_item, root)
+            item = _validate_roadmap_item(raw_item, root, historical=True)
         except BoardError:
             blocker = raw_item.get("blocker")
             status = raw_item.get("status")
@@ -855,7 +859,7 @@ def _read_roadmap_store(root: Path, *, migrate_legacy: bool = False) -> dict[str
             migrated["status"] = "BLOCKED"
             migrated["revision"] = revision + 1
             migrated["updated_at"] = utc_now()
-            item = _validate_roadmap_item(migrated, root)
+            item = _validate_roadmap_item(migrated, root, historical=True)
             changed = True
         items.append(item)
     if len({item["id"] for item in items}) != len(items):
