@@ -14,8 +14,9 @@ Identities may publish operational board state and are also message participants
 and roadmap owners. Message participants may send and acknowledge messages.
 An empty workstream list permits safe workstream names. To customize a project,
 edit this configuration in its runtime directory before launching agents; retain
-at least one identity. `init` does not reset it. Stores with no configuration keep
-legacy `sol-master` / `claude-master` vocabulary until explicitly initialized.
+at least one identity. `init` does not reset it. Stores with no configuration use
+the fallback `gpt-master` / `claude-master` vocabulary until explicitly initialized.
+Existing project configurations and historical records are not renamed automatically.
 
 The ticket actor registry (`actors.v1.json`) is separate. `actor register master
 --role master` records ticket role and ownership relationships; it does not edit

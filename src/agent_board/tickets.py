@@ -234,7 +234,7 @@ def _require_actor_name(label: str, value: str) -> str:
 
 
 def master_of(actor: str) -> str:
-    """``sol-master/worker`` -> ``sol-master``; a bare name is its own master."""
+    """``gpt-master/worker`` -> ``gpt-master``; a bare name is its own master."""
 
     _require_actor_name("actor", actor)
     return actor.split("/", 1)[0] if "/" in actor else actor

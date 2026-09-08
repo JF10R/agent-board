@@ -13,7 +13,7 @@ class FriendlyTicketRoutesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = board.initialize(Path(temporary) / "board")
             tickets.migrate_ticket_display_ids(root, prefix="ATLAS")
-            created = tickets.create_ticket(root, actor="sol-master", ticket_id="OLD-RAW", title="Ticket")
+            created = tickets.create_ticket(root, actor="gpt-master", ticket_id="OLD-RAW", title="Ticket")
             server = web.create_server(root, port=0, token="test", projects=[web.Project("Atlas", root)])
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()

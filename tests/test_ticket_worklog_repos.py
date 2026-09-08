@@ -15,10 +15,10 @@ class WorklogRepositoryTest(unittest.TestCase):
             evidence_repo = Path(temporary) / "implementation"
             roots = {board_repo: board.initialize(board_repo / ".git" / "agent-board"), evidence_repo: board.initialize(evidence_repo / ".git" / "agent-board")}
             for root in roots.values():
-                tickets.create_ticket(root, actor="sol-master", ticket_id="T1", title="Work")
+                tickets.create_ticket(root, actor="gpt-master", ticket_id="T1", title="Work")
             wrong_log = roots[evidence_repo] / "ticket-events" / "T1.jsonl"
             wrong_before = wrong_log.read_bytes()
-            argv = ["--repo", str(board_repo), "ticket", "worklog", "--actor", "sol-master", "--id", "T1", "--summary", "Implemented"]
+            argv = ["--repo", str(board_repo), "ticket", "worklog", "--actor", "gpt-master", "--id", "T1", "--summary", "Implemented"]
             with patch.object(board, "board_root", side_effect=lambda repo: roots[Path(repo)]) as resolver, redirect_stdout(StringIO()):
                 board.run(argv + ["--repo", str(evidence_repo), "--sha", "abc123"])
                 self.assertTrue(all(call.args == (board_repo,) for call in resolver.call_args_list))

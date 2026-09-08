@@ -10,7 +10,7 @@ from agent_board.errors import BoardError
 def post(root: Path, summary: str, **kwargs) -> str:
     return cli.post_message(
         root,
-        sender="sol-master",
+        sender="gpt-master",
         recipient="lead",
         kind="STATUS",
         priority="NORMAL",

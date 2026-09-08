@@ -44,7 +44,7 @@ def test_capabilities_describe_actual_parser_without_repo():
 
 
 def test_http_conflicts_use_error_type_not_message(api):
-    payload = {"actor": "sol-master"}
+    payload = {"actor": "gpt-master"}
     with patch.object(tickets, "claim_ticket", side_effect=RevisionConflict("stale state")):
         assert api("POST", "/api/tickets/T1/claim", payload)[0] == 409
     with patch.object(tickets, "claim_ticket", side_effect=BoardError("revision conflict is not a type")):
@@ -52,14 +52,14 @@ def test_http_conflicts_use_error_type_not_message(api):
 
 
 def test_claim_retries_and_context_feed(api):
-    assert api("POST", "/api/tickets", {"actor": "sol-master", "id": "T1", "title": "Workflow"})[0] == 201
-    payload = {"actor": "sol-master", "expected_revision": 1, "idempotency_key": "claim-once"}
+    assert api("POST", "/api/tickets", {"actor": "gpt-master", "id": "T1", "title": "Workflow"})[0] == 201
+    payload = {"actor": "gpt-master", "expected_revision": 1, "idempotency_key": "claim-once"}
     status, claimed = api("POST", "/api/tickets/T1/claim", payload)
     assert status == 200, claimed
     status, replay = api("POST", "/api/tickets/T1/claim", payload)
     assert status == 200, replay
     assert replay["ticket"]["revision"] == claimed["ticket"]["revision"]
-    assert api("GET", "/api/actors/sol-master/context")[0] == 200
+    assert api("GET", "/api/actors/gpt-master/context")[0] == 200
     status, changes = api("GET", "/api/tickets/changes?limit=1")
     assert status == 200, changes
     assert len(changes["events"]) == 1
@@ -70,14 +70,14 @@ def test_claim_retries_and_context_feed(api):
 
 def test_handoff_rejects_non_object_evidence_and_unknown_fields(api):
     for payload in [
-        {"actor": "sol-master", "summary": "Delivered", "next_actor": "claude-master", "evidence": []},
-        {"actor": "sol-master", "summary": "Delivered", "next_actor": "claude-master", "evidence": {}, "unexpected": True},
+        {"actor": "gpt-master", "summary": "Delivered", "next_actor": "claude-master", "evidence": []},
+        {"actor": "gpt-master", "summary": "Delivered", "next_actor": "claude-master", "evidence": {}, "unexpected": True},
     ]:
         assert api("POST", "/api/tickets/T1/handoff", payload)[0] == 400
 
 
 def test_cli_handoff_preserves_evidence_repo_and_retry_key(tmp_path):
-    args = cli.build_parser().parse_args(["--repo", str(tmp_path), "ticket", "handoff", "--id", "T1", "--actor", "sol-master", "--summary", "Delivered", "--next-actor", "claude-master", "--repo", "evidence-repo", "--sha", "abc", "--idempotency-key", "once"])
+    args = cli.build_parser().parse_args(["--repo", str(tmp_path), "ticket", "handoff", "--id", "T1", "--actor", "gpt-master", "--summary", "Delivered", "--next-actor", "claude-master", "--repo", "evidence-repo", "--sha", "abc", "--idempotency-key", "once"])
     with patch.object(tickets, "handoff_ticket", return_value={}) as handoff, redirect_stdout(io.StringIO()):
         cli._run_ticket_command(args, tmp_path)
     assert handoff.call_args.kwargs["evidence"] == {"repo": "evidence-repo", "sha": "abc"}
@@ -95,11 +95,11 @@ def test_message_feed_route_precedes_message_detail(api):
 
 
 def test_atomic_handoff_validation_and_retry(api):
-    api("POST", "/api/tickets", {"actor": "sol-master", "id": "T1", "title": "Delivery"})
-    status, claimed = api("POST", "/api/tickets/T1/claim", {"actor": "sol-master"})
+    api("POST", "/api/tickets", {"actor": "gpt-master", "id": "T1", "title": "Delivery"})
+    status, claimed = api("POST", "/api/tickets/T1/claim", {"actor": "gpt-master"})
     assert status == 200, claimed
     ticket = claimed["ticket"]
-    payload = {"actor": "sol-master", "summary": "Verified delivery", "next_actor": "claude-master",
+    payload = {"actor": "gpt-master", "summary": "Verified delivery", "next_actor": "claude-master",
                "stage": "QA", "evidence": {"test": "pytest", "exit_code": 0},
                "expected_revision": ticket["revision"], "lease_token": ticket["lease"]["token"], "idempotency_key": "deliver-once"}
     status, invalid = api("POST", "/api/tickets/T1/handoff", {**payload, "evidence": {"test": "pytest"}})
@@ -119,8 +119,8 @@ def test_atomic_handoff_validation_and_retry(api):
 
 def test_dependency_removal_exposes_reciprocal_update(api):
     for ticket_id in ("T1", "T2"):
-        assert api("POST", "/api/tickets", {"actor": "sol-master", "id": ticket_id, "title": ticket_id})[0] == 201
-    payload = {"actor": "sol-master", "dep_type": "BLOCKED_BY", "target": "T2"}
+        assert api("POST", "/api/tickets", {"actor": "gpt-master", "id": ticket_id, "title": ticket_id})[0] == 201
+    payload = {"actor": "gpt-master", "dep_type": "BLOCKED_BY", "target": "T2"}
     status, blocked = api("POST", "/api/tickets/T1/dependencies", {**payload, "expected_revision": 1})
     assert status == 200, blocked
     status, removed = api("POST", "/api/tickets/T1/dep-remove", {**payload, "expected_revision": blocked["ticket"]["revision"], "idempotency_key": "remove-once"})
@@ -131,7 +131,7 @@ def test_dependency_removal_exposes_reciprocal_update(api):
 
 def test_uncertain_commit_is_not_reported_as_rejection(api):
     with patch.object(tickets, "claim_ticket", side_effect=CommitUncertain("T1", 2)):
-        status, response = api("POST", "/api/tickets/T1/claim", {"actor": "sol-master"})
+        status, response = api("POST", "/api/tickets/T1/claim", {"actor": "gpt-master"})
     assert status == 503
     assert response["ok"] is False
     assert response["committed"] is None
@@ -141,14 +141,14 @@ def test_uncertain_commit_is_not_reported_as_rejection(api):
 
 
 def test_create_comment_worklog_retry_keys(api):
-    create = {"actor": "sol-master", "id": "T1", "title": "Retry", "idempotency_key": "create-once"}
+    create = {"actor": "gpt-master", "id": "T1", "title": "Retry", "idempotency_key": "create-once"}
     assert api("POST", "/api/tickets", create)[0] == 201
     assert api("POST", "/api/tickets", create)[0] == 201
     for action, payload in [("comment", {"summary": "Progress"}), ("worklog", {"summary": "Tested", "evidence": {"test": "pytest", "exit_code": 0}})]:
-        payload.update(actor="sol-master", idempotency_key=action + "-once")
+        payload.update(actor="gpt-master", idempotency_key=action + "-once")
         status, first = api("POST", "/api/tickets/T1/" + action, payload)
         assert status == 200, first
         status, retry = api("POST", "/api/tickets/T1/" + action, payload)
         assert status == 200, retry
         assert first["ticket"]["revision"] == retry["ticket"]["revision"]
-    assert api("POST", "/api/tickets", {"actor": "sol-master", "title": "No stable id", "idempotency_key": "unsafe"})[0] == 400
+    assert api("POST", "/api/tickets", {"actor": "gpt-master", "title": "No stable id", "idempotency_key": "unsafe"})[0] == 400

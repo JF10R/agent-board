@@ -10,7 +10,7 @@ from typing import Any
 from .errors import BoardError
 from .runtime import canonical_json, require_safe_token, write_exclusive
 
-IDENTITIES = frozenset({"sol-master", "claude-master"})
+IDENTITIES = frozenset({"gpt-master", "claude-master"})
 MESSAGE_SENDERS = IDENTITIES | frozenset({"lead", "operator"})
 MESSAGE_RECIPIENTS = MESSAGE_SENDERS
 ROADMAP_OWNERS = IDENTITIES | frozenset({"shared", "unassigned"})
@@ -38,7 +38,7 @@ def default_project_config() -> dict[str, Any]:
 
 
 def seed_project_config(root: Path) -> Path | None:
-    """Written by `init` only. A store without the file keeps the historical vocabulary, unchanged."""
+    """Written by `init` only. A store without the file uses the fallback vocabulary."""
 
     path = Path(root) / PROJECT_CONFIG_FILE
     if path.exists():
@@ -65,7 +65,7 @@ def _validated_project_config(raw: Any) -> dict[str, Any]:
 
 
 def project_config(root: Path | None) -> dict[str, Any]:
-    """The project's vocabulary, as frozensets. root None = the historical default identities (back-compatible)."""
+    """Return project vocabulary, or fallback identities when no config exists."""
 
     if root is None:
         return {
@@ -85,9 +85,7 @@ def project_config(root: Path | None) -> dict[str, Any]:
         cached = _PROJECT_CONFIG_CACHE.get(key)
         if cached is not None and cached[0] == stamp:
             return cached[1]
-    if (
-        stamp == -1
-    ):  # no file: the historical vocabulary, so an existing store never changes meaning
+    if stamp == -1:
         return project_config(None)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))

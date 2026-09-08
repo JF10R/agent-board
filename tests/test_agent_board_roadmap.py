@@ -27,7 +27,7 @@ class RoadmapStoreTest(unittest.TestCase):
 
     def item(self, **overrides: object) -> dict[str, object]:
         value: dict[str, object] = {
-            "actor": "sol-master",
+            "actor": "gpt-master",
             "item_id": "A.1",
             "title": "Semantic naming",
             "summary": "Make service roles understandable",
@@ -202,7 +202,7 @@ class RoadmapStoreTest(unittest.TestCase):
         self.assertEqual(result["relation"], "DECISION")
         with self.assertRaisesRegex(roadmap.RoadmapValidationError, "unknown board message"):
             self.store.link_message(
-                actor="sol-master",
+                actor="gpt-master",
                 item_id="A.1",
                 revision=1,
                 message_id="missing",
@@ -210,7 +210,7 @@ class RoadmapStoreTest(unittest.TestCase):
             )
         with self.assertRaisesRegex(roadmap.RoadmapValidationError, "relation"):
             self.store.link_message(
-                actor="sol-master",
+                actor="gpt-master",
                 item_id="A.1",
                 revision=1,
                 message_id="msg-evidence",
@@ -222,7 +222,7 @@ class RoadmapStoreTest(unittest.TestCase):
         unverified.upsert_item(**self.item())
         with self.assertRaisesRegex(roadmap.RoadmapValidationError, "existence validator"):
             unverified.link_message(
-                actor="sol-master", item_id="A.1", revision=1,
+                actor="gpt-master", item_id="A.1", revision=1,
                 message_id="msg-context", relation="CONTEXT",
             )
 
@@ -233,12 +233,12 @@ class RoadmapStoreTest(unittest.TestCase):
         capped.upsert_item(**self.item())
         for index in range(20):
             capped.link_message(
-                actor="sol-master", item_id="A.1", revision=1,
+                actor="gpt-master", item_id="A.1", revision=1,
                 message_id=f"msg-{index}", relation="CONTEXT",
             )
         with self.assertRaisesRegex(roadmap.RoadmapValidationError, "at most 20"):
             capped.link_message(
-                actor="sol-master", item_id="A.1", revision=1,
+                actor="gpt-master", item_id="A.1", revision=1,
                 message_id="msg-20", relation="CONTEXT",
             )
 
@@ -328,7 +328,7 @@ class RoadmapStoreTest(unittest.TestCase):
             self.root,
             _database_path=self.root / ".legacy-import.tmp",
         )
-        imported = store.import_v1(legacy, actor="sol-master", source_bytes=source)
+        imported = store.import_v1(legacy, actor="gpt-master", source_bytes=source)
         self.assertEqual(legacy, original)
         self.assertEqual(imported[0]["revision"], 8)
         self.assertEqual(imported[0]["status"], "BLOCKED")
@@ -350,7 +350,7 @@ class RoadmapStoreTest(unittest.TestCase):
                     "title": "Completed old item",
                     "summary": "Legacy had no impact field",
                     "status": "COMPLETE",
-                    "owner": "sol-master",
+                    "owner": "gpt-master",
                     "progress": 100,
                     "blocker": "",
                     "updated_at": "2026-08-30T12:00:00Z",
@@ -364,7 +364,7 @@ class RoadmapStoreTest(unittest.TestCase):
             _database_path=self.root / ".complete-import.tmp",
         )
         result = store.import_v1(
-            legacy, actor="sol-master", source_bytes=source
+            legacy, actor="gpt-master", source_bytes=source
         )
         self.assertEqual(result[0]["revision"], 4)
         self.assertEqual(
@@ -396,7 +396,7 @@ class RoadmapStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "power loss"):
             store.import_v1(
                 legacy,
-                actor="sol-master",
+                actor="gpt-master",
                 source_bytes=json.dumps(legacy).encode("utf-8"),
             )
         self.assertEqual(store.list_items(), [])
@@ -412,7 +412,7 @@ class RoadmapStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(roadmap.RoadmapValidationError, "does not match"):
             store.import_v1(
                 parsed,
-                actor="sol-master",
+                actor="gpt-master",
                 source_bytes=json.dumps(other).encode("utf-8"),
             )
 
@@ -420,7 +420,7 @@ class RoadmapStoreTest(unittest.TestCase):
         one = self.store.upsert_item(**self.item(item_id="ONE"))
         two = self.store.upsert_item(**self.item(item_id="TWO", title="Two"))
         link = self.store.link_message(
-            actor="sol-master", item_id="ONE", revision=1,
+            actor="gpt-master", item_id="ONE", revision=1,
             message_id="msg-evidence", relation="EVIDENCE",
         )
         self.assertEqual((one["change_seq"], two["change_seq"], link["change_seq"]), (1, 2, 3))
@@ -464,7 +464,7 @@ class RoadmapStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "pre-publish crash"):
             roadmap.RoadmapStore.migrate_v1_atomic(
                 root,
-                actor="sol-master",
+                actor="gpt-master",
                 legacy_writes_quiesced=lambda: True,
                 fault_injector=fail,
             )
@@ -474,7 +474,7 @@ class RoadmapStoreTest(unittest.TestCase):
 
         published = roadmap.RoadmapStore.migrate_v1_atomic(
             root,
-            actor="sol-master",
+            actor="gpt-master",
             legacy_writes_quiesced=lambda: True,
         )
         self.assertEqual(published.get_item("LEGACY")["revision"], 3)
@@ -494,7 +494,7 @@ class RoadmapStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "post-publish crash"):
             roadmap.RoadmapStore.migrate_v1_atomic(
                 root,
-                actor="sol-master",
+                actor="gpt-master",
                 legacy_writes_quiesced=lambda: True,
                 fault_injector=fail,
             )
@@ -519,7 +519,7 @@ class RoadmapStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(roadmap.RoadmapError, "not quiesced"):
             roadmap.RoadmapStore.migrate_v1_atomic(
                 guarded_root,
-                actor="sol-master",
+                actor="gpt-master",
                 legacy_writes_quiesced=lambda: False,
             )
         self.assertFalse((guarded_root / roadmap.DATABASE_NAME).exists())
@@ -530,7 +530,7 @@ class RoadmapStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(roadmap.RoadmapError, "not the completed import"):
             roadmap.RoadmapStore.migrate_v1_atomic(
                 incomplete_root,
-                actor="sol-master",
+                actor="gpt-master",
                 legacy_writes_quiesced=lambda: True,
             )
 
@@ -550,7 +550,7 @@ class RoadmapStoreTest(unittest.TestCase):
         with self.assertRaises(roadmap.RoadmapSourceConflict) as caught:
             roadmap.RoadmapStore.migrate_v1_atomic(
                 root,
-                actor="sol-master",
+                actor="gpt-master",
                 legacy_writes_quiesced=lambda: True,
                 expected_v1_source_sha256=observed_sha,
             )
@@ -559,7 +559,7 @@ class RoadmapStoreTest(unittest.TestCase):
 
         migrated = roadmap.RoadmapStore.migrate_v1_atomic(
             root,
-            actor="sol-master",
+            actor="gpt-master",
             legacy_writes_quiesced=lambda: True,
         )
         self.assertEqual(
@@ -580,7 +580,7 @@ class RoadmapStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(roadmap.RoadmapError, "restricted"):
             self.store.import_v1(
                 legacy,
-                actor="sol-master",
+                actor="gpt-master",
                 source_bytes=source,
             )
 

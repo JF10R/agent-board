@@ -45,7 +45,7 @@ class TicketWebApiTest(unittest.TestCase):
         return response.status, value
 
     def create_ticket(self, **overrides: object) -> dict[str, object]:
-        payload: dict[str, object] = {"actor": "sol-master", "id": "T1", "title": "Web ticket"}
+        payload: dict[str, object] = {"actor": "gpt-master", "id": "T1", "title": "Web ticket"}
         payload.update(overrides)
         status, value = self.request("POST", "/api/tickets", payload)
         self.assertEqual(status, 201, value)
@@ -62,7 +62,7 @@ class TicketWebApiTest(unittest.TestCase):
 
     def test_create_without_manual_id_returns_stable_display_id(self) -> None:
         status, value = self.request("POST", "/api/tickets", {
-            "actor": "sol-master", "title": "Friendly ticket creation",
+            "actor": "gpt-master", "title": "Friendly ticket creation",
         })
         self.assertEqual(status, 201, value)
         ticket = value["ticket"]
@@ -75,7 +75,7 @@ class TicketWebApiTest(unittest.TestCase):
     def test_ticket_detail_links_explicit_inbox_message(self) -> None:
         self.create_ticket()
         status, posted = self.request("POST", "/api/messages", {
-            "actor": "sol-master", "to": "claude-master", "kind": "STATUS",
+            "actor": "gpt-master", "to": "claude-master", "kind": "STATUS",
             "priority": "NORMAL", "workstream": "board", "summary": "Linked handoff",
             "body": "Developer evidence is ready.", "requires_ack": False, "ticket_id": "T1",
         })
@@ -93,12 +93,12 @@ class TicketWebApiTest(unittest.TestCase):
 
     def test_assign_review_and_done_flow(self) -> None:
         self.create_ticket()
-        status, value = self.request("POST", "/api/tickets/T1/assign", {"actor": "sol-master", "assignee": "sol-master/worker"})
+        status, value = self.request("POST", "/api/tickets/T1/assign", {"actor": "gpt-master", "assignee": "gpt-master/worker"})
         self.assertEqual(status, 200, value)
-        self.assertEqual(value["ticket"]["assignee"], "sol-master/worker")  # type: ignore[index]
-        status, value = self.request("POST", "/api/tickets/T1/review", {"actor": "sol-master", "verdict": "PASS", "summary": "ok"})
+        self.assertEqual(value["ticket"]["assignee"], "gpt-master/worker")  # type: ignore[index]
+        status, value = self.request("POST", "/api/tickets/T1/review", {"actor": "gpt-master", "verdict": "PASS", "summary": "ok"})
         self.assertEqual(status, 200, value)
-        status, value = self.request("POST", "/api/tickets/T1/done", {"actor": "sol-master"})
+        status, value = self.request("POST", "/api/tickets/T1/done", {"actor": "gpt-master"})
         self.assertEqual(status, 200, value)
         self.assertEqual(value["ticket"]["stage"], "DONE")  # type: ignore[index]
 
@@ -106,40 +106,40 @@ class TicketWebApiTest(unittest.TestCase):
         self.create_ticket()
         body = "Review question\n\n" + "Evidence details. " * 30
         status, value = self.request("POST", "/api/tickets/T1/comment", {
-            "actor": "sol-master", "summary": "Review question", "body": body,
+            "actor": "gpt-master", "summary": "Review question", "body": body,
         })
         self.assertEqual(status, 200, value)
         comment = value["ticket"]["comments"][-1]
         self.assertEqual(comment["body"], body)
         self.assertEqual(comment["summary"], "Review question")
-        self.assertEqual(comment["actor"], "sol-master")
+        self.assertEqual(comment["actor"], "gpt-master")
 
     def test_revision_conflict_reports_409(self) -> None:
         created = self.create_ticket()
         status, value = self.request(
             "POST", "/api/tickets/T1/transition",
-            {"actor": "sol-master", "stage": "ANALYSIS", "expected_revision": created["revision"] + 1},
+            {"actor": "gpt-master", "stage": "ANALYSIS", "expected_revision": created["revision"] + 1},
         )
         self.assertEqual(status, 409, value)
         self.assertIn("revision conflict", str(value))
 
     def test_write_routes_require_token(self) -> None:
-        status, value = self.request("POST", "/api/tickets", {"actor": "sol-master", "id": "T1", "title": "x"}, token=None)
+        status, value = self.request("POST", "/api/tickets", {"actor": "gpt-master", "id": "T1", "title": "x"}, token=None)
         self.assertEqual(status, 403)
         self.assertIn("token", str(value))
 
     def test_unknown_ticket_action_is_rejected(self) -> None:
         self.create_ticket()
-        status, value = self.request("POST", "/api/tickets/T1/not-a-real-action", {"actor": "sol-master"})
+        status, value = self.request("POST", "/api/tickets/T1/not-a-real-action", {"actor": "gpt-master"})
         self.assertEqual(status, 400)
         self.assertIn("unknown ticket action", str(value))
 
     def test_actor_register_and_list(self) -> None:
-        status, value = self.request("POST", "/api/actors", {"name": "sol-master", "role": "master"})
+        status, value = self.request("POST", "/api/actors", {"name": "gpt-master", "role": "master"})
         self.assertEqual(status, 201, value)
         status, value = self.request("GET", "/api/actors")
         self.assertEqual(status, 200)
-        self.assertEqual([item["name"] for item in value["actors"]], ["sol-master"])  # type: ignore[index]
+        self.assertEqual([item["name"] for item in value["actors"]], ["gpt-master"])  # type: ignore[index]
 
     def test_state_carries_tickets_leases_and_actors_not_claims(self) -> None:
         self.create_ticket()

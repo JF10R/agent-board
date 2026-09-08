@@ -50,8 +50,8 @@ class WebTreeEndpointsTest(unittest.TestCase):
         tree.annotate_roadmap_item(self.root, actor="claude-master", item_id="kid", gates=[("G1", "PENDING", "")])
         for index in range(3):
             self.post("lead", "claude-master", f"needs ack {index}", requires_ack=True)
-        acked = self.post("lead", "sol-master", "acked one", requires_ack=True)
-        board.acknowledge(self.root, actor="sol-master", message_id=acked["id"])
+        acked = self.post("lead", "gpt-master", "acked one", requires_ack=True)
+        board.acknowledge(self.root, actor="gpt-master", message_id=acked["id"])
         self.post("lead", "operator", "plain", requires_ack=False)
 
         status, value = self.get("/api/state")
@@ -66,7 +66,7 @@ class WebTreeEndpointsTest(unittest.TestCase):
         backlog = value["ack_backlog"]
         self.assertEqual(backlog["claude-master"]["count"], 3)
         self.assertEqual(len(backlog["claude-master"]["ids"]), 3)
-        self.assertEqual(backlog["sol-master"]["count"], 0)
+        self.assertEqual(backlog["gpt-master"]["count"], 0)
         self.assertEqual(backlog["operator"]["count"], 0)
         self.assertEqual(backlog["lead"]["count"], 0)
         status, value = self.get("/api/ack-backlog")
@@ -97,7 +97,7 @@ class WebTreeEndpointsTest(unittest.TestCase):
         root = self.post("lead", "claude-master", "root question", body="# Question\nWhy?")
         first = self.post("claude-master", "lead", "first answer", reply_to=root["id"], body="Because.")
         second = self.post("lead", "claude-master", "follow-up", reply_to=first["id"], requires_ack=True)
-        sibling = self.post("sol-master", "lead", "aside", reply_to=root["id"])
+        sibling = self.post("gpt-master", "lead", "aside", reply_to=root["id"])
         self.post("operator", "lead", "unrelated")
         status, value = self.get(f"/api/messages/{second['id']}/thread")
         self.assertEqual(status, 200)

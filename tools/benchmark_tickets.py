@@ -32,7 +32,7 @@ def main() -> None:
         root = cli.initialize(Path(directory) / "board")
         for index in range(args.tickets):
             tickets.create_ticket(
-                root, actor="sol-master", ticket_id=f"B{index}", title="Benchmark"
+                root, actor="gpt-master", ticket_id=f"B{index}", title="Benchmark"
             )
 
         def write_history(index: int) -> list[float]:
@@ -42,7 +42,7 @@ def main() -> None:
                 tickets.comment_ticket(
                     root,
                     f"B{index}",
-                    actor="sol-master",
+                    actor="gpt-master",
                     summary=f"Entry {event}",
                     body="x" * 256,
                 )

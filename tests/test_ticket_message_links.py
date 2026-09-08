@@ -9,10 +9,10 @@ class TicketMessageLinksTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = board.initialize(Path(self.temporary.name) / "board")
-        tickets.create_ticket(self.root, actor="sol-master", ticket_id="T1", title="Ticket")
+        tickets.create_ticket(self.root, actor="gpt-master", ticket_id="T1", title="Ticket")
 
     def post(self, **overrides):
-        args = dict(sender="sol-master", recipient="claude-master", kind="STATUS", priority="NORMAL", workstream="test", summary="Status")
+        args = dict(sender="gpt-master", recipient="claude-master", kind="STATUS", priority="NORMAL", workstream="test", summary="Status")
         args.update(overrides)
         return board.post_message(self.root, **args)
 
@@ -36,10 +36,10 @@ class TicketMessageLinksTest(unittest.TestCase):
         self.assertEqual(list((self.root / "messages").glob("*.md")), [])
 
     def test_web_post_and_parser_support_optional_link(self):
-        status, result = web.send_messages(self.root, dict(actor="sol-master", to="claude-master", kind="STATUS", priority="NORMAL", workstream="test", summary="Status", body="", requires_ack=False, ticket_id="T1"))
+        status, result = web.send_messages(self.root, dict(actor="gpt-master", to="claude-master", kind="STATUS", priority="NORMAL", workstream="test", summary="Status", body="", requires_ack=False, ticket_id="T1"))
         self.assertEqual(status, 201)
         self.assertEqual(result["results"][0]["message"]["ticket_id"], "T1")
-        args = board.build_parser().parse_args(["post", "--from", "sol-master", "--to", "claude-master", "--kind", "STATUS", "--workstream", "test", "--summary", "Status", "--ticket-id", "T1"])
+        args = board.build_parser().parse_args(["post", "--from", "gpt-master", "--to", "claude-master", "--kind", "STATUS", "--workstream", "test", "--summary", "Status", "--ticket-id", "T1"])
         self.assertEqual(args.ticket_id, "T1")
 
     def test_reverse_links_ignore_unrelated_malformed_metadata(self):
@@ -50,7 +50,7 @@ class TicketMessageLinksTest(unittest.TestCase):
         self.assertEqual(detail["linked_messages_malformed"], 1)
 
     def test_reply_descendants_and_acknowledgements_preserve_explicit_link_boundary(self):
-        tickets.create_ticket(self.root, actor="sol-master", ticket_id="T2", title="Other")
+        tickets.create_ticket(self.root, actor="gpt-master", ticket_id="T2", title="Other")
         first = self.post(ticket_id="T1", requires_ack=True, created_at="2026-09-06T10:00:00Z")
         reply = self.post(reply_to=first["id"], created_at="2026-09-06T11:00:00Z")
         descendant = self.post(reply_to=reply["id"], created_at="2026-09-06T12:00:00Z")
@@ -82,12 +82,12 @@ class TicketMessageLinksTest(unittest.TestCase):
             self.assertEqual(len(linked), 2 if reference else 0)
 
     def test_blockers_are_authoritative_including_archived_and_unknown_targets(self):
-        tickets.create_ticket(self.root, actor="sol-master", ticket_id="B", title="Blocker")
-        tickets.add_dependency(self.root, "T1", actor="sol-master", dep_type="BLOCKED_BY", target="B")
+        tickets.create_ticket(self.root, actor="gpt-master", ticket_id="B", title="Blocker")
+        tickets.add_dependency(self.root, "T1", actor="gpt-master", dep_type="BLOCKED_BY", target="B")
         self.assertEqual(web.ticket_detail(self.root, "T1")["open_blockers"], ["B"])
-        tickets.transition_ticket(self.root, "B", actor="sol-master", stage="CANCELLED")
-        tickets.archive_ticket(self.root, "B", actor="sol-master")
+        tickets.transition_ticket(self.root, "B", actor="gpt-master", stage="CANCELLED")
+        tickets.archive_ticket(self.root, "B", actor="gpt-master")
         self.assertEqual(next(item for item in web.ticket_list(self.root) if item["id"] == "T1")["open_blockers"], [])
         with tickets._ticket_lock(self.root):
-            tickets._append_ticket_event(self.root, "T1", {"type": tickets.EV_DEP_ADD, "actor": "sol-master", "dep_type": "BLOCKED_BY", "target": "missing"})
+            tickets._append_ticket_event(self.root, "T1", {"type": tickets.EV_DEP_ADD, "actor": "gpt-master", "dep_type": "BLOCKED_BY", "target": "missing"})
         self.assertEqual(web.ticket_detail(self.root, "T1")["open_blockers"], ["missing"])

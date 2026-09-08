@@ -19,7 +19,7 @@ from agent_board import watch
 def post(root, recipient="claude-master", summary="New message"):
     return board.post_message(
         root,
-        sender="sol-master",
+        sender="gpt-master",
         recipient=recipient,
         kind="STATUS",
         priority="NORMAL",

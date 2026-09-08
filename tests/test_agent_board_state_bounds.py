@@ -23,7 +23,7 @@ def _write_message(
 ) -> None:
     metadata = {
         "id": message_id,
-        "from": "sol-master",
+        "from": "gpt-master",
         "to": recipient,
         "kind": "STATUS",
         "priority": "NORMAL",
@@ -111,7 +111,7 @@ class StateMessageBoundsTests(unittest.TestCase):
 
     def test_at_most_two_hundred_matches_legacy_state_exactly(self) -> None:
         _write_message(
-            self.root, "zeta", "2026-08-30T12:00:00Z", recipient="sol-master"
+            self.root, "zeta", "2026-08-30T12:00:00Z", recipient="gpt-master"
         )
         _write_message(self.root, "alpha", "2026-08-30T12:00:00Z")
         expected_by_id: dict[str, dict[str, object]] = {}
@@ -235,7 +235,7 @@ class StateApiIsolationTests(unittest.TestCase):
     def test_bad_status_files_cannot_break_state(self) -> None:
         board.publish_status(
             self.root,
-            actor="sol-master",
+            actor="gpt-master",
             state="ACTIVE",
             summary="valid status",
         )
@@ -269,7 +269,7 @@ class StateApiIsolationTests(unittest.TestCase):
         status, state = self.get("/api/state")
 
         self.assertEqual(status, 200)
-        self.assertEqual([item["identity"] for item in state["status"]], ["sol-master"])
+        self.assertEqual([item["identity"] for item in state["status"]], ["gpt-master"])
 
 
 if __name__ == "__main__":

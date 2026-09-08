@@ -9,7 +9,7 @@ const token = document.querySelector('meta[name="agent-board-token"]').content;
 const $ = id => document.getElementById(id);
 const emptyTree = {items:[],roots:[],moved:[],counts:{},warnings:[],views:null};
 const emptyState = {messages:[],messages_meta:{total:0,returned:0,has_more:false,malformed:0,oversized:0},status:[],roadmap:[],roadmap_tree:emptyTree,ack_backlog:{},tickets:[],leases:[],actors:[],choices:{identities:[],message_senders:[],message_recipients:[],message_actors:[],kinds:[],priorities:[],roadmap_statuses:[],roadmap_owners:[],roadmap_kinds:[],ticket_stages:[],ticket_kinds:[],ticket_dep_types:[],ticket_review_verdicts:[]}};
-const actorLabels = {"sol-master":"Astra Master","claude-master":"Claude Master",lead:"Lead",operator:"Operator (you)",BOTH:"Both masters",shared:"Shared",unassigned:"Unassigned"};
+const actorLabels = {"gpt-master":"GPT Master","claude-master":"Claude Master",lead:"Lead",operator:"Operator (you)",BOTH:"Both masters",shared:"Shared",unassigned:"Unassigned"};
 const absoluteET = new Intl.DateTimeFormat("en-CA", {timeZone:"America/Toronto", month:"short", day:"numeric", year:"numeric", hour:"numeric", minute:"2-digit", second:"2-digit", timeZoneName:"short"});
 const shortET = new Intl.DateTimeFormat("en-CA", {timeZone:"America/Toronto", hour:"numeric", minute:"2-digit", timeZoneName:"short"});
 const compactET = new Intl.DateTimeFormat("en-CA", {timeZone:"America/Toronto", month:"short", day:"numeric", hour:"numeric", minute:"2-digit"});

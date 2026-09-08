@@ -72,15 +72,15 @@ class DerivationRulesTest(unittest.TestCase):
 
     def test_blocked_view_carries_the_blocker_text_and_the_dependencies_it_waits_on(self) -> None:
         base = [item("stuck", "BLOCKED", progress=30, blocker="Lead ruling pending"), item("upstream", "IN_PROGRESS", progress=50), item("ok")]
-        result = views(base, {"stuck": {"depends_on": ["upstream"], "blockers": [{"text": "disk full", "added_by": "sol-master", "added_at": stamp(1)}]}})
+        result = views(base, {"stuck": {"depends_on": ["upstream"], "blockers": [{"text": "disk full", "added_by": "gpt-master", "added_at": stamp(1)}]}})
         self.assertEqual(result["views"]["blocked"], [{"id": "stuck", "blockers": ["Lead ruling pending", "disk full"], "waiting_on": ["upstream"]}])
 
     def test_parallel_frontier_is_mutually_independent_and_grouped_by_owner(self) -> None:
-        base = [item("a", "IN_PROGRESS", progress=10, owner="claude-master"), item("b", "IN_PROGRESS", progress=10, owner="sol-master"),
-                item("c", owner="sol-master"), item("after-a", "IN_PROGRESS", progress=5, owner="claude-master"), item("ready", "READY", progress=90, owner="shared"),
+        base = [item("a", "IN_PROGRESS", progress=10, owner="claude-master"), item("b", "IN_PROGRESS", progress=10, owner="gpt-master"),
+                item("c", owner="gpt-master"), item("after-a", "IN_PROGRESS", progress=5, owner="claude-master"), item("ready", "READY", progress=90, owner="shared"),
                 item("stale", "IN_PROGRESS", progress=10, hours_ago=100), item("stuck", "BLOCKED", blocker="x", owner="shared")]
         result = views(base, {"after-a": {"depends_on": ["a"]}})
-        self.assertEqual(result["views"]["parallel"], {"items": ["a", "b", "c", "ready"], "by_owner": {"claude-master": ["a"], "shared": ["ready"], "sol-master": ["b", "c"]}})
+        self.assertEqual(result["views"]["parallel"], {"items": ["a", "b", "c", "ready"], "by_owner": {"claude-master": ["a"], "shared": ["ready"], "gpt-master": ["b", "c"]}})
 
     def test_milestone_aggregates_children_and_dependencies_without_inventing_progress(self) -> None:
         base = [item("train-a", "IN_PROGRESS", progress=0), item("kid", "IN_PROGRESS", progress=40, summary="child of train-a."), item("dep", "CLOSED", progress=100),
@@ -129,11 +129,11 @@ class SidecarWriteTest(unittest.TestCase):
 
     def test_annotate_round_trips_the_new_fields_and_leaves_v1_bytes_untouched(self) -> None:
         before = (self.root / "roadmap.v1.json").read_bytes()
-        merged = tree.annotate_roadmap_item(self.root, actor="sol-master", item_id="a", depends_on=["b", "c", "b"], kind="milestone", impact="  unblocks Tuesday  ", standby="paused until ruling")
+        merged = tree.annotate_roadmap_item(self.root, actor="gpt-master", item_id="a", depends_on=["b", "c", "b"], kind="milestone", impact="  unblocks Tuesday  ", standby="paused until ruling")
         self.assertEqual((self.root / "roadmap.v1.json").read_bytes(), before)
         self.assertEqual(merged["depends_on_ids"], ["b", "c"])
-        self.assertEqual((merged["kind"], merged["impact"], merged["standby_flag"]["reason"], merged["standby_flag"]["set_by"]), ("MILESTONE", "unblocks Tuesday", "paused until ruling", "sol-master"))
-        cleared = tree.annotate_roadmap_item(self.root, actor="sol-master", item_id="a", depends_on=[], kind=None, impact="", standby=None)
+        self.assertEqual((merged["kind"], merged["impact"], merged["standby_flag"]["reason"], merged["standby_flag"]["set_by"]), ("MILESTONE", "unblocks Tuesday", "paused until ruling", "gpt-master"))
+        cleared = tree.annotate_roadmap_item(self.root, actor="gpt-master", item_id="a", depends_on=[], kind=None, impact="", standby=None)
         self.assertEqual((cleared["depends_on_ids"], cleared["kind"], cleared["impact"], cleared["standby_flag"]), ([], None, None, None))
         self.assertEqual(board.list_roadmap(self.root)[0]["revision"], 1, "sidecar writes never bump the v1 revision")
 
@@ -203,7 +203,7 @@ class WebPlumbingTest(unittest.TestCase):
         return response.status, value
 
     def test_roadmap_post_accepts_optional_sidecar_fields_and_state_carries_views(self) -> None:
-        base = {"actor": "claude-master", "id": "dep", "title": "Dep", "summary": "s", "status": "IN_PROGRESS", "owner": "sol-master", "progress": 10, "blocker": "", "expected_revision": 0}
+        base = {"actor": "claude-master", "id": "dep", "title": "Dep", "summary": "s", "status": "IN_PROGRESS", "owner": "gpt-master", "progress": 10, "blocker": "", "expected_revision": 0}
         self.assertEqual(self.request("POST", "/api/roadmap", base)[0], 200)
         status, value = self.request("POST", "/api/roadmap", {**base, "id": "ms", "owner": "shared", "kind": "MILESTONE", "depends_on": ["dep"], "impact": "Tuesday readiness", "standby": "paused"})
         self.assertEqual(status, 200, value)

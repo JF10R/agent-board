@@ -94,7 +94,7 @@ class RoadmapTreeTest(unittest.TestCase):
         before = v1_path.read_bytes()
         item = tree.annotate_roadmap_item(
             self.root,
-            actor="sol-master",
+            actor="gpt-master",
             item_id="orphan",
             parent_id="night",
             add_blockers=["needs the I8 proof"],
@@ -108,20 +108,20 @@ class RoadmapTreeTest(unittest.TestCase):
         self.assertEqual(item["parent_id"], "night")
         self.assertEqual(item["parent_source"], "annotation")
         self.assertEqual([blocker["text"] for blocker in item["blockers"]], ["needs the I8 proof"])
-        self.assertEqual(item["blockers"][0]["added_by"], "sol-master")
+        self.assertEqual(item["blockers"][0]["added_by"], "gpt-master")
         self.assertEqual([(gate["name"], gate["state"]) for gate in item["gates"]], [("G-A3-1", "PENDING"), ("DETERMINISM", "PASS")])
         self.assertEqual(item["due"], "2026-09-02")
-        self.assertEqual(item["updated_by"], "sol-master")
+        self.assertEqual(item["updated_by"], "gpt-master")
         # Sidecar-only, and the base listing output is byte-identical to before.
         self.assertTrue((self.root / tree.EXT_FILE).exists())
         self.assertEqual(board.list_roadmap(self.root), store["items"])
         # Re-annotating replaces a gate by name and clears blockers on request.
         item = tree.annotate_roadmap_item(
-            self.root, actor="sol-master", item_id="orphan", gates=[("G-A3-1", "FAIL", "band drifted")], clear_blockers=True
+            self.root, actor="gpt-master", item_id="orphan", gates=[("G-A3-1", "FAIL", "band drifted")], clear_blockers=True
         )
         self.assertEqual([(gate["name"], gate["state"]) for gate in item["gates"]], [("DETERMINISM", "PASS"), ("G-A3-1", "FAIL")])
         self.assertEqual(item["blockers"], [])
-        item = tree.annotate_roadmap_item(self.root, actor="sol-master", item_id="orphan", parent_id=None, due=None)
+        item = tree.annotate_roadmap_item(self.root, actor="gpt-master", item_id="orphan", parent_id=None, due=None)
         self.assertIsNone(item["parent_id"])
         self.assertIsNone(item["due"])
 

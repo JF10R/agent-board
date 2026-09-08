@@ -30,8 +30,8 @@ DATABASE_NAME = "roadmap.v2.sqlite3"
 COMPACTION_SUPPORTED = False
 SQLITE_MAX_INTEGER = 2**63 - 1
 STATUSES = frozenset({"PENDING", "IN_PROGRESS", "BLOCKED", "COMPLETE"})
-DEFAULT_ACTORS = frozenset({"sol-master", "claude-master"})
-DEFAULT_OWNERS = frozenset({"sol-master", "claude-master", "shared", "unassigned"})
+DEFAULT_ACTORS = frozenset({"gpt-master", "claude-master"})
+DEFAULT_OWNERS = frozenset({"gpt-master", "claude-master", "shared", "unassigned"})
 LINK_RELATIONS = frozenset(
     {"CONTEXT", "DECISION", "EVIDENCE", "HANDOFF", "BLOCKER"}
 )

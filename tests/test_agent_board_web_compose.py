@@ -43,7 +43,7 @@ def _run(payload: dict) -> dict:
     return json.loads(result.stdout)
 
 
-IDENTITIES = ["claude-master", "sol-master"]
+IDENTITIES = ["claude-master", "gpt-master"]
 
 
 def test_reply_to_a_master_defaults_to_answer_and_carries_thread_and_workstream() -> None:
@@ -59,10 +59,10 @@ def test_reply_to_a_master_defaults_to_answer_and_carries_thread_and_workstream(
 
 def test_reply_to_a_human_outbound_message_keeps_the_human_as_author_and_caps_the_summary() -> None:
     # The web UI is operated by humans: following up on lead's own message stays lead -> master.
-    reply = {"id": "m2", "from": "lead", "to": "sol-master", "kind": "ALERT", "workstream": "GENERAL", "summary": "a" * 300}
+    reply = {"id": "m2", "from": "lead", "to": "gpt-master", "kind": "ALERT", "workstream": "GENERAL", "summary": "a" * 300}
     out = _run({"reply": reply, "identities": IDENTITIES, "summary": ""})["reply"]
     assert out["kind"] == "ANSWER"
-    assert out["actor"] == "lead" and out["to"] == "sol-master"
+    assert out["actor"] == "lead" and out["to"] == "gpt-master"
     assert len(out["summary"]) == 300
     assert out["summary"].startswith("Re: ")
 

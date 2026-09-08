@@ -25,7 +25,7 @@ class AgentBoardTest(unittest.TestCase):
 
     def post(self, **overrides: object) -> dict[str, object]:
         arguments: dict[str, object] = {
-            "sender": "sol-master",
+            "sender": "gpt-master",
             "recipient": "claude-master",
             "kind": "STATUS",
             "priority": "NORMAL",
@@ -59,7 +59,7 @@ class AgentBoardTest(unittest.TestCase):
     def test_only_recipient_can_ack(self) -> None:
         message_id = str(self.post()["id"])
         with self.assertRaisesRegex(board.BoardError, "cannot acknowledge"):
-            board.acknowledge(self.root, actor="sol-master", message_id=message_id)
+            board.acknowledge(self.root, actor="gpt-master", message_id=message_id)
 
     def test_unauthorized_identity_cannot_write(self) -> None:
         with self.assertRaisesRegex(board.BoardError, "unauthorized identity"):
@@ -162,8 +162,8 @@ class AgentBoardTest(unittest.TestCase):
             self.root / "locks" / "leases--T1.json.lock",
         )
         self.assertEqual(
-            board._exclusive_lock_path(self.root / "status" / "sol-master.json"),
-            self.root / "locks" / "status--sol-master.json.lock",
+            board._exclusive_lock_path(self.root / "status" / "gpt-master.json"),
+            self.root / "locks" / "status--gpt-master.json.lock",
         )
 
     def test_posting_a_message_leaves_no_lock_dotfile_beside_it(self) -> None:
@@ -273,7 +273,7 @@ class AgentBoardTest(unittest.TestCase):
         def publish(index: int) -> None:
             board.publish_status(
                 self.root,
-                actor="sol-master",
+                actor="gpt-master",
                 state="ACTIVE",
                 workstream=f"stream-{index}",
                 summary=f"update {index}",
@@ -282,9 +282,9 @@ class AgentBoardTest(unittest.TestCase):
 
         with ThreadPoolExecutor(max_workers=16) as pool:
             list(pool.map(publish, range(64)))
-        status_path = self.root / "status" / "sol-master.json"
+        status_path = self.root / "status" / "gpt-master.json"
         parsed = json.loads(status_path.read_text(encoding="utf-8"))
-        self.assertEqual(parsed["identity"], "sol-master")
+        self.assertEqual(parsed["identity"], "gpt-master")
         self.assertEqual(parsed["state"], "ACTIVE")
         self.assertTrue(parsed["summary"].startswith("update "))
         self.assertEqual(list((self.root / "status").glob("*.tmp")), [])
@@ -292,7 +292,7 @@ class AgentBoardTest(unittest.TestCase):
     def test_roadmap_upsert_is_atomic_and_revision_guarded(self) -> None:
         item = board.upsert_roadmap_item(
             self.root,
-            actor="sol-master",
+            actor="gpt-master",
             item_id="M0",
             title="Board UI",
             summary="Local coordination dashboard",
@@ -323,7 +323,7 @@ class AgentBoardTest(unittest.TestCase):
     def test_roadmap_concurrent_update_has_one_winner(self) -> None:
         board.upsert_roadmap_item(
             self.root,
-            actor="sol-master",
+            actor="gpt-master",
             item_id="M1",
             title="Initial",
             summary="Initial item",
@@ -337,7 +337,7 @@ class AgentBoardTest(unittest.TestCase):
             try:
                 board.upsert_roadmap_item(
                     self.root,
-                    actor="sol-master" if index % 2 else "claude-master",
+                    actor="gpt-master" if index % 2 else "claude-master",
                     item_id="M1",
                     title=f"Writer {index}",
                     summary="Concurrent update",
@@ -358,7 +358,7 @@ class AgentBoardTest(unittest.TestCase):
 
     def test_roadmap_validation_rejects_bad_values(self) -> None:
         base = dict(
-            actor="sol-master",
+            actor="gpt-master",
             item_id="M2",
             title="Validation",
             summary="Validation fixture",
@@ -391,9 +391,9 @@ class AgentBoardTest(unittest.TestCase):
                 board.run(
                     [
                         "--repo", ".", "roadmap", "upsert",
-                        "--actor", "sol-master", "--id", "CLI-1",
+                        "--actor", "gpt-master", "--id", "CLI-1",
                         "--title", "CLI item", "--summary", "Created by CLI",
-                        "--status", "COMPLETE", "--owner", "sol-master",
+                        "--status", "COMPLETE", "--owner", "gpt-master",
                         "--progress", "100", "--expected-revision", "0",
                     ]
                 ),
@@ -435,7 +435,7 @@ class AgentBoardTest(unittest.TestCase):
 
         updated = board.upsert_roadmap_item(
             self.root,
-            actor="sol-master",
+            actor="gpt-master",
             item_id="LEGACY-1",
             title=migrated["title"],
             summary=migrated["summary"],
@@ -481,7 +481,7 @@ class GitCommonDirTest(unittest.TestCase):
             board.initialize(main_root)
             message = board.post_message(
                 main_root,
-                sender="sol-master",
+                sender="gpt-master",
                 recipient="claude-master",
                 kind="STATUS",
                 priority="NORMAL",
@@ -541,7 +541,7 @@ class AgentBoardWebTest(unittest.TestCase):
 
     def message_payload(self, **overrides: object) -> dict[str, object]:
         payload: dict[str, object] = {
-            "actor": "sol-master",
+            "actor": "gpt-master",
             "to": "claude-master",
             "kind": "STATUS",
             "priority": "NORMAL",
@@ -673,7 +673,7 @@ class AgentBoardWebTest(unittest.TestCase):
         self.assertTrue(content_type.startswith("text/css"))
         status, _, _ = self.request("GET", "/../cli.py")
         self.assertEqual(status, 404)
-        status, _, _ = self.request("GET", "/api/messages/..%2Fstatus%2Fsol-master")
+        status, _, _ = self.request("GET", "/api/messages/..%2Fstatus%2Fgpt-master")
         self.assertEqual(status, 404)
 
     def test_messages_folder_route_returns_the_real_path(self) -> None:
