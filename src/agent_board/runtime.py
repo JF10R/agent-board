@@ -103,7 +103,14 @@ def file_lock(path: Path, timeout_seconds: float = 5.0) -> Iterable[None]:
         while not locked:
             candidate = None
             try:
-                candidate = path.open("r+b")
+                try:
+                    candidate = path.open("r+b")
+                except OSError as exc:
+                    raise BoardError(
+                        f"cannot open filesystem lock for writing: {path}; "
+                        f"errno={exc.errno}, winerror={getattr(exc, 'winerror', None)}; "
+                        "check filesystem permissions and execution context"
+                    ) from exc
                 if path.stat().st_size < 1:
                     raise PermissionError("lock sentinel is still initializing")
                 candidate.seek(0)
