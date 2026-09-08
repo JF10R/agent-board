@@ -1,0 +1,5 @@
+include AGENTS.md CLAUDE.md README.md LICENSE
+include agent_board.py agent_board_web.py agent_board_watch.py
+recursive-include docs *.md *.py
+recursive-include tools *.py
+recursive-include tests *.py

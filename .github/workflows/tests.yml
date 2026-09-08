@@ -1,0 +1,33 @@
+name: Tests
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.10', '3.13']
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m ruff check --select F src/agent_board agent_board.py agent_board_web.py agent_board_watch.py
+      - run: python -m pytest tests -q
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install build
+      - run: python -m build
+      - run: python -m venv /tmp/agent-board-wheel
+      - run: /tmp/agent-board-wheel/bin/python -m pip install dist/*.whl
+      - working-directory: /tmp
+        run: /tmp/agent-board-wheel/bin/python -c "from importlib.resources import files; import agent_board.cli, agent_board.web, agent_board.watch; assert files('agent_board').joinpath('web_static/index.html').is_file()"
