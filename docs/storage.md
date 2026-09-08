@@ -62,3 +62,36 @@ modify historical messages. Cursors are tied to the index epoch and recipient.
 If the index is lost, the server rejects an old cursor explicitly: restart without
 a cursor and deduplicate replayed messages. Ticket feeds use `ticket changes`;
 keep ticket and message cursors separate and treat both as opaque values.
+
+## Restricted agent contexts
+
+A writable repository checkout does not imply a writable git common directory.
+A harness may allow source edits while protecting `.git` as read-only. Because
+Agent Board stores its runtime under `<git-common-dir>/agent-board/`, that context
+cannot perform board mutations, even under the correct assigned actor identity.
+Some read commands also initialize runtime files, acquire writable locks, or
+refresh projections; do not assume that a listing requires only filesystem reads.
+
+An error such as `cannot open filesystem lock for writing` with `errno=13`
+indicates an access failure before lock acquisition. Changing the actor, lease
+token, retry key, or timeout does not grant filesystem permissions. A failed lock
+open does not append the requested ticket event.
+
+The operator must use the harness's supported permission configuration or approval
+mechanism to authorize the assigned agent's access to the actual board store.
+If the current context cannot change permissions, the operator must start a new
+context with the required access and preserve the assigned actor's task context.
+Adding the checkout as a writable root is insufficient when `.git` remains
+explicitly protected. Check effective permissions in the new context before
+resuming; Agent Board cannot change harness policy.
+
+After access is authorized, the assigned agent reloads the ticket revision and
+lease, reconciles any intervening updates, and performs its own handoff. Reuse the
+idempotency key for the same logical request. If the lease expired, use the normal
+explicit recovery workflow before delivery. A master must not impersonate the
+assigned agent to make the handoff appear completed.
+
+While access is blocked, report the permission error and next action to the
+coordinator through the available harness channel. Independently authorized
+source work can continue. Do not delete lock files, remove sandbox ACL rules, or
+route mutations through a more privileged process to bypass the restriction.

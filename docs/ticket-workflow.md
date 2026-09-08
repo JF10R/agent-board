@@ -101,3 +101,7 @@ mutation or cache rebuild recovers the pending operation before new work proceed
 `actor context NAME` summarizes current revision, blockers, delivery, reviews and
 candidate actions; validate current state when acting. `capabilities` exposes
 project-aware command options, choices and supported idempotent operations.
+
+For a writable checkout with a protected `.git` directory, follow the
+[restricted-context procedure](storage.md#restricted-agent-contexts). The operator
+authorizes the context; the assigned agent remains responsible for its handoff.
