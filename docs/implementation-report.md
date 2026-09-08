@@ -22,7 +22,7 @@ Implemented the audit's correctness fixes, coordination utilities, interface red
 | Architecture | Storage primitives, identity/configuration and shared exceptions live in neutral modules. Ticket logic no longer imports CLI utilities. Compatibility exports preserve existing integrations. |
 | Documentation | Updated bootstrap, complete generated command reference, HTTP contracts, recovery, executable workflow and native listener guidance. Removed misleading comments and stale product examples. |
 | Distribution | Added installed CLI, web and watcher commands; source archives include documentation, root scripts and test support. |
-| Development | Added dev dependencies, static correctness checks, package smoke tests and CI for Python 3.10/3.13 on Windows, Linux and macOS. |
+| Development | Added dev dependencies, static correctness checks, package smoke tests and one Ubuntu CI job using Python 3.13. |
 
 ## Interface
 
@@ -72,7 +72,7 @@ Stat-validated event/display projections and serialized fold snapshots avoid rep
 
 ## Limits and operational notes
 
-- Linux/macOS listener backends are implemented and included in CI, but only Windows native behavior was executed locally. The remote CI matrix has not been run in this session.
+- Linux/macOS listener backends are implemented. Local verification exercised Windows; CI covers Ubuntu only to limit runner usage. macOS and other Python versions are not currently CI-tested.
 - The project-wide write lock remains to protect coordinated updates; no unmeasured distributed-storage migration was introduced.
 - Browser checks used representative fixtures, not an exhaustive screen-reader or large-board accessibility certification.
 - Some temporary test/package artifacts remain because automatic approval review rejected cleanup with `blocked by policy`. They are ignored by Git and were not substituted for source changes.

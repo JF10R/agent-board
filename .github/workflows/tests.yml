@@ -1,31 +1,26 @@
 name: Tests
 on: [push, pull_request]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ['3.10', '3.13']
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       PYTHONIOENCODING: utf-8
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - run: python -m pip install -e ".[dev]"
-      - run: python -m ruff check --select F src/agent_board agent_board.py agent_board_web.py agent_board_watch.py
-      - run: python -m pytest tests -q
-  package:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.13'
-      - run: python -m pip install build
+          cache: pip
+      - run: python -m pip install --upgrade -e ".[dev]"
+      - run: python -m pip check
+      - run: python -m ruff check --select F src/agent_board agent_board.py agent_board_web.py agent_board_watch.py
+      - run: python -m pytest tests -q
       - run: python -m build
       - run: python -m venv /tmp/agent-board-wheel
       - run: /tmp/agent-board-wheel/bin/python -m pip install dist/*.whl

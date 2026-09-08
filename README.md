@@ -106,9 +106,8 @@ python -m build
 python -m ruff check --select F src/agent_board agent_board.py agent_board_web.py agent_board_watch.py
 ```
 
-CI runs tests on Python 3.10 and 3.13 on Ubuntu, Windows and macOS, plus
-Ruff static correctness checks. A separate packaging
-check builds the wheel, installs it outside the checkout, imports the package and
+CI uses one Ubuntu job with Python 3.13 for tests and Ruff static correctness
+checks. The same job builds the wheel, installs it outside the checkout, imports the package and
 checks that dashboard assets are present. Root launchers run directly from a clone;
 the wheel includes the importable `agent_board` package and installed commands
 `agent-board`, `agent-board-web` and `agent-board-watch`.

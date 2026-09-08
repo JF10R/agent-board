@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=84"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -16,7 +16,7 @@ agent-board-web = "agent_board.web:main"
 agent-board-watch = "agent_board.watch:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "build>=1,<2", "ruff>=0.15,<1"]
+dev = ["pytest>=9.1.1,<10", "build>=1.6,<2", "ruff>=0.16.6,<1"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
