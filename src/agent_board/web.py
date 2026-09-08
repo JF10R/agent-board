@@ -21,11 +21,15 @@ try:
     from agent_board import derive
     from agent_board import tree
     from agent_board import tickets
+    from agent_board.changes import message_changes
+    from agent_board.errors import CommitUncertain, RevisionConflict, TicketConflict
 except ImportError:  # Direct execution from within the package directory.
     import cli as board  # type: ignore[no-redef]
     import derive  # type: ignore[no-redef]
     import tree  # type: ignore[no-redef]
     import tickets  # type: ignore[no-redef]
+    from changes import message_changes
+    from errors import CommitUncertain, RevisionConflict, TicketConflict
 
 
 # A browser that navigates away, switches project or supersedes a poll drops the socket mid-response.
@@ -558,6 +562,13 @@ class AgentBoardHandler(BaseHTTPRequestHandler):
             elif path.startswith("/api/messages/") and path.endswith("/thread"):
                 message_id = unquote(path.removeprefix("/api/messages/").removesuffix("/thread"))
                 self._json(HTTPStatus.OK, {"ok": True, **message_thread(project.board_root, message_id)})
+            elif path == "/api/messages/changes":
+                query = parse_qs(urlsplit(self.path).query)
+                try:
+                    limit = int(query.get("limit", ["100"])[0])
+                except ValueError as exc:
+                    raise board.BoardError("limit must be an integer") from exc
+                self._json(HTTPStatus.OK, {"ok": True, **message_changes(project.board_root, cursor=query.get("cursor", [None])[0], limit=limit, actor=query.get("actor", [None])[0])})
             elif path.startswith("/api/messages/"):
                 message_id = unquote(path.removeprefix("/api/messages/"))
                 metadata, body, raw = board.read_message(project.board_root, message_id)
@@ -580,6 +591,20 @@ class AgentBoardHandler(BaseHTTPRequestHandler):
             elif path.startswith("/api/roadmap/"):
                 item_id = unquote(path.removeprefix("/api/roadmap/"))
                 self._json(HTTPStatus.OK, {"ok": True, "item": board.get_roadmap_item(project.board_root, item_id)})
+            elif path == "/api/capabilities":
+                self._json(HTTPStatus.OK, {"ok": True, "capabilities": board.capabilities(board.project_config(project.board_root))})
+            elif path == "/api/tickets/changes":
+                query = parse_qs(urlsplit(self.path).query)
+                try:
+                    limit = int(query.get("limit", ["100"])[0])
+                except ValueError as exc:
+                    raise board.BoardError("limit must be an integer") from exc
+                self._json(HTTPStatus.OK, {"ok": True, **tickets.ticket_changes(project.board_root, cursor=query.get("cursor", [None])[0], limit=limit)})
+            elif path == "/api/tickets/cache/verify":
+                self._json(HTTPStatus.OK, {"ok": True, "cache": tickets.verify_ticket_cache(project.board_root)})
+            elif path.startswith("/api/actors/") and path.endswith("/context"):
+                actor = unquote(path.removeprefix("/api/actors/").removesuffix("/context"))
+                self._json(HTTPStatus.OK, {"ok": True, "context": tickets.actor_context(project.board_root, actor=actor)})
             elif path == "/api/tickets/tree":
                 self._json(HTTPStatus.OK, {"ok": True, "tree": tickets.ticket_tree(project.board_root)})
             elif path == "/api/tickets/critical-path":
@@ -626,6 +651,11 @@ class AgentBoardHandler(BaseHTTPRequestHandler):
             self._note_disconnect("the request")
         except PermissionError as exc:
             self._error(HTTPStatus.FORBIDDEN, str(exc))
+        except CommitUncertain as exc:
+            self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(exc), "committed": None,
+                       "ticket_id": exc.ticket_id, "revision": exc.revision})
+        except (RevisionConflict, TicketConflict) as exc:
+            self._error(HTTPStatus.CONFLICT, str(exc))
         except board.BoardError as exc:
             self._error(HTTPStatus.NOT_FOUND, str(exc))
         except OSError as exc:
@@ -683,8 +713,10 @@ class AgentBoardHandler(BaseHTTPRequestHandler):
             elif path == "/api/tickets":
                 value = _exact_object(
                     payload, {"actor", "title"},
-                    {"id", "kind", "summary", "body", "parent", "acceptance_criteria", "assignee", "reviewer", "subagents"},
+                    {"id", "kind", "summary", "body", "parent", "acceptance_criteria", "assignee", "reviewer", "subagents", "idempotency_key"},
                 )
+                if "idempotency_key" in value and "id" not in value:
+                    raise board.BoardError("idempotent ticket creation requires an explicit id")
                 ticket = tickets.create_ticket(
                     project.board_root,
                     actor=_string(value["actor"], "actor", 128),
@@ -698,8 +730,12 @@ class AgentBoardHandler(BaseHTTPRequestHandler):
                     assignee=_optional_string(value.get("assignee"), "assignee", 128, allow_empty=False),
                     reviewer=_optional_string(value.get("reviewer"), "reviewer", 128, allow_empty=False),
                     subagents=_string_list(value["subagents"], "subagents", 128) if "subagents" in value else None,
+                    idempotency_key=_optional_string(value.get("idempotency_key"), "idempotency_key", 128, allow_empty=False),
                 )
                 self._json(HTTPStatus.CREATED, {"ok": True, "ticket": ticket})
+            elif path == "/api/tickets/cache/rebuild":
+                _exact_object(payload, set())
+                self._json(HTTPStatus.OK, {"ok": True, "cache": tickets.rebuild_ticket_cache(project.board_root)})
             elif path.startswith("/api/tickets/"):
                 remainder = unquote(path.removeprefix("/api/tickets/"))
                 ticket_id, separator, action = remainder.rpartition("/")
@@ -722,9 +758,13 @@ class AgentBoardHandler(BaseHTTPRequestHandler):
             self._note_disconnect("the request")
         except PermissionError as exc:
             self._error(HTTPStatus.FORBIDDEN, str(exc))
+        except CommitUncertain as exc:
+            self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(exc), "committed": None,
+                       "ticket_id": exc.ticket_id, "revision": exc.revision})
+        except (RevisionConflict, TicketConflict) as exc:
+            self._error(HTTPStatus.CONFLICT, str(exc))
         except board.BoardError as exc:
-            status = HTTPStatus.CONFLICT if "revision conflict" in str(exc) else HTTPStatus.BAD_REQUEST
-            self._error(status, str(exc))
+            self._error(HTTPStatus.BAD_REQUEST, str(exc))
         except OSError as exc:
             self._error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
@@ -764,17 +804,8 @@ def _string_list(value: Any, label: str, item_cap: int) -> list[str]:
 
 
 def resolve_ticket_reference(root: Path, reference: str) -> str:
-    reference = board._require_safe_token("ticket reference", reference)
-    # Exact canonical IDs keep their historical meaning, even when a display ID
-    # looks similar. Friendly links otherwise resolve through frozen identity data.
-    if tickets._ticket_events_path(root, reference).is_file():
-        tickets.get_ticket(root, reference)
-        return reference
-    matches = [ticket_id for ticket_id, display_id in tickets._read_display_ids(root)["ids"].items() if display_id.casefold() == reference.casefold()]
-    if len(matches) == 1:
-        tickets.get_ticket(root, matches[0])
-        return matches[0]
-    raise board.BoardError(f"unknown ticket reference: {reference}")
+    """Resolve friendly links through the ticket domain's public identity contract."""
+    return tickets.resolve_ticket_reference(root, reference)
 
 
 def ticket_list(root: Path, **filters: Any) -> list[dict[str, Any]]:
@@ -834,6 +865,34 @@ def ticket_detail(root: Path, ticket_id: str) -> dict[str, Any]:
 def ticket_action(root: Path, ticket_id: str, action: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     """Dispatch one POST /api/tickets/<id>/<action> body to the matching tickets.py call."""
 
+    if action == "claim":
+        value = _exact_object(payload, {"actor"}, {"expected_revision", "ttl_sec", "recover", "idempotency_key"})
+        return tickets.claim_ticket(root, ticket_id, actor=_string(value["actor"], "actor", 128),
+            expected_revision=_optional_int(value.get("expected_revision"), "expected_revision"),
+            ttl_sec=_integer(value["ttl_sec"], "ttl_sec") if "ttl_sec" in value else tickets.DEFAULT_LEASE_TTL_SEC,
+            recover=_boolean(value["recover"], "recover") if "recover" in value else False,
+            idempotency_key=_optional_string(value.get("idempotency_key"), "idempotency_key", 128, allow_empty=False))
+    if action == "handoff":
+        value = _exact_object(payload, {"actor", "summary", "evidence", "next_actor"}, {"body", "stage", "expected_revision", "lease_token", "idempotency_key"})
+        if not isinstance(value["evidence"], dict):
+            raise board.BoardError("evidence must be a JSON object")
+        return tickets.handoff_ticket(root, ticket_id, actor=_string(value["actor"], "actor", 128),
+            summary=_string(value["summary"], "summary", 300), evidence=value["evidence"],
+            next_actor=_string(value["next_actor"], "next_actor", 128),
+            stage=_string(value.get("stage", "QA"), "stage", 32), body=_string(value.get("body", ""), "body", 32768, allow_empty=True),
+            expected_revision=_optional_int(value.get("expected_revision"), "expected_revision"),
+            lease_token=_optional_string(value.get("lease_token"), "lease_token", 128, allow_empty=False),
+            idempotency_key=_optional_string(value.get("idempotency_key"), "idempotency_key", 128, allow_empty=False))
+    if action == "dep-remove":
+        value = _exact_object(payload, {"actor", "dep_type", "target"}, {"expected_revision", "idempotency_key"})
+        return tickets.remove_dependency(root, ticket_id, actor=_string(value["actor"], "actor", 128),
+            dep_type=_string(value["dep_type"], "dep_type", 32), target=_string(value["target"], "target", 128),
+            expected_revision=_optional_int(value.get("expected_revision"), "expected_revision"),
+            idempotency_key=_optional_string(value.get("idempotency_key"), "idempotency_key", 128, allow_empty=False))
+    if action == "recover":
+        value = _exact_object(payload, {"actor"}, {"expected_revision"})
+        return tickets.recover_ticket_tail(root, ticket_id, actor=_string(value["actor"], "actor", 128),
+            expected_revision=_optional_int(value.get("expected_revision"), "expected_revision"))
     if action == "upsert":
         value = _exact_object(
             payload, {"actor", "expected_revision"},
@@ -870,10 +929,12 @@ def ticket_action(root: Path, ticket_id: str, action: str, payload: Mapping[str,
             subagents=_string_list(value["subagents"], "subagents", 128) if "subagents" in value else None,
         )
     if action == "heartbeat":
-        value = _exact_object(payload, {"actor"}, {"ttl_sec"})
+        value = _exact_object(payload, {"actor"}, {"ttl_sec", "lease_token", "expected_revision"})
         return tickets.heartbeat_ticket(
             root, ticket_id, actor=_string(value["actor"], "actor", 128),
             ttl_sec=_optional_int(value.get("ttl_sec"), "ttl_sec"),
+            lease_token=_optional_string(value.get("lease_token"), "lease_token", 128, allow_empty=False),
+            expected_revision=_optional_int(value.get("expected_revision"), "expected_revision"),
         )
     if action == "transition":
         value = _exact_object(payload, {"actor", "stage"}, {"expected_revision", "summary"})
@@ -883,19 +944,21 @@ def ticket_action(root: Path, ticket_id: str, action: str, payload: Mapping[str,
             summary=_string(value["summary"], "summary", 300, allow_empty=True) if "summary" in value else "",
         )
     if action == "comment":
-        value = _exact_object(payload, {"actor", "summary"}, {"body", "expected_revision"})
+        value = _exact_object(payload, {"actor", "summary"}, {"body", "expected_revision", "idempotency_key"})
         return tickets.comment_ticket(
             root, ticket_id, actor=_string(value["actor"], "actor", 128), summary=_string(value["summary"], "summary", 300),
             body=_string(value["body"], "body", 32768, allow_empty=True) if "body" in value else "",
+            idempotency_key=_optional_string(value.get("idempotency_key"), "idempotency_key", 128, allow_empty=False),
             expected_revision=_optional_int(value.get("expected_revision"), "expected_revision"),
         )
     if action == "worklog":
-        value = _exact_object(payload, {"actor", "summary", "evidence"}, {"expected_revision"})
+        value = _exact_object(payload, {"actor", "summary", "evidence"}, {"expected_revision", "idempotency_key"})
         evidence = value["evidence"]
         if not isinstance(evidence, dict):
             raise board.BoardError("evidence must be a JSON object")
         return tickets.add_worklog(
             root, ticket_id, actor=_string(value["actor"], "actor", 128), summary=_string(value["summary"], "summary", 300),
+            idempotency_key=_optional_string(value.get("idempotency_key"), "idempotency_key", 128, allow_empty=False),
             evidence=evidence, expected_revision=_optional_int(value.get("expected_revision"), "expected_revision"),
         )
     if action == "review":
@@ -915,10 +978,11 @@ def ticket_action(root: Path, ticket_id: str, action: str, payload: Mapping[str,
             force=_boolean(value["force"], "force") if "force" in value else False,
         )
     if action == "dependencies":
-        value = _exact_object(payload, {"actor", "dep_type", "target"})
+        value = _exact_object(payload, {"actor", "dep_type", "target"}, {"expected_revision"})
         return tickets.add_dependency(
             root, ticket_id, actor=_string(value["actor"], "actor", 128),
             dep_type=_string(value["dep_type"], "dep_type", 32), target=_string(value["target"], "target", 128),
+            expected_revision=_optional_int(value.get("expected_revision"), "expected_revision"),
         )
     if action == "archive":
         value = _exact_object(payload, {"actor"})

@@ -3,46 +3,53 @@
 
 The runtime lives below ``git rev-parse --git-common-dir`` and is therefore
 shared by every worktree while remaining outside the versioned working tree.
-Only ``sol-master`` and ``claude-master`` may mutate operational board state.
-``lead`` and ``operator`` are message participants: they may send, receive and
-acknowledge messages, but cannot mutate status, claims or roadmap state.
+Project configuration controls operational identities and message participants.
+The actor registry adds ticket roles and master/subagent relationships.
 """
 
 from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import stat
-import subprocess
 import sys
-import tempfile
 import threading
-import time
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 import uuid
 
+# Compatibility exports keep existing integrations working after module extraction.
+from .identity import (
+    IDENTITIES as IDENTITIES,
+    MESSAGE_SENDERS as MESSAGE_SENDERS,
+    MESSAGE_RECIPIENTS as MESSAGE_RECIPIENTS,
+    ROADMAP_OWNERS as ROADMAP_OWNERS,
+    PROJECT_CONFIG_FILE as PROJECT_CONFIG_FILE,
+    PROJECT_CONFIG_KEYS as PROJECT_CONFIG_KEYS,
+    DEFAULT_PROJECT_CONFIG as DEFAULT_PROJECT_CONFIG,
+    default_project_config as default_project_config,
+    seed_project_config,
+    project_config,
+    require_identity as _require_identity,
+    require_message_sender as _require_message_sender,
+    require_message_recipient as _require_message_recipient,
+)
+from .runtime import (
+    STORE_DIRECTORY, utc_now, discover_git_common_dir,
+    SAFE_TOKEN as SAFE_TOKEN,
+    MAX_SUMMARY_CHARS as MAX_SUMMARY_CHARS,
+    require_text as _require_text, require_summary as _require_summary,
+    require_safe_token as _require_safe_token, canonical_json as _canonical_json,
+    file_lock as _file_lock,
+    exclusive_lock_path as _exclusive_lock_path,  # noqa: F401
+    write_exclusive as _write_exclusive, write_atomic_replace as _write_atomic_replace,
+)
+from .errors import BoardError, RevisionConflict
 
-IDENTITIES = frozenset({"sol-master", "claude-master"})
-MESSAGE_SENDERS = IDENTITIES | frozenset({"lead", "operator"})
-MESSAGE_RECIPIENTS = MESSAGE_SENDERS
-# One store = one project. Who may act on it is data, not a hard-coded list: project.v1.json in the
-# store carries it, seeded on init with a neutral default vocabulary.
-PROJECT_CONFIG_FILE = "project.v1.json"
-PROJECT_CONFIG_KEYS = ("identities", "message_participants", "roadmap_owners", "workstreams")
-DEFAULT_PROJECT_CONFIG = {
-    "identities": ["master"],
-    "message_participants": ["lead", "operator"],
-    "roadmap_owners": ["shared", "unassigned"],
-    "workstreams": [],
-}
-_PROJECT_CONFIG_CACHE: dict[str, tuple[int, dict[str, Any]]] = {}
-_PROJECT_CONFIG_LOCK = threading.Lock()
+
 KINDS = frozenset(
     {
         "STATUS",
@@ -59,7 +66,7 @@ PRIORITIES = frozenset({"LOW", "NORMAL", "HIGH", "CRITICAL"})
 STATUS_STATES = frozenset({"ACTIVE", "IDLE", "BLOCKED", "OFFLINE"})
 ROADMAP_STATUSES = frozenset(
     {
-        # canonical (docs/roadmap/STATUS-VOCABULARY.md)
+        # Preferred status vocabulary.
         "NOT_STARTED",
         "IN_PROGRESS",
         "READY",
@@ -70,7 +77,6 @@ ROADMAP_STATUSES = frozenset(
         "COMPLETE",
     }
 )
-ROADMAP_OWNERS = frozenset({"sol-master", "claude-master", "shared", "unassigned"})
 ROADMAP_SCHEMA_VERSION = 1
 MESSAGE_FIELDS = (
     "id",
@@ -84,7 +90,6 @@ MESSAGE_FIELDS = (
     "created_at",
     "summary",
 )
-SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 STATE_MESSAGE_LIMIT = 200
 MAX_MESSAGE_FILE_BYTES = 128 * 1024
 MAX_MESSAGE_FRONT_MATTER_BYTES = 16 * 1024
@@ -105,102 +110,6 @@ _MESSAGE_STATE_CACHE: dict[
 ] = {}
 
 
-class BoardError(RuntimeError):
-    """Expected board or command contract failure."""
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-
-
-def _require_identity(identity: str, root: Path | None = None) -> str:
-    allowed_set = project_config(root)["identities"]
-    if identity not in allowed_set:
-        allowed = ", ".join(sorted(allowed_set))
-        raise BoardError(f"unauthorized identity {identity!r}; allowed: {allowed}")
-    return identity
-
-
-def _require_message_sender(identity: str, root: Path | None = None) -> str:
-    allowed_set = project_config(root)["message_senders"]
-    if identity not in allowed_set:
-        allowed = ", ".join(sorted(allowed_set))
-        raise BoardError(f"unauthorized identity {identity!r} for message sender; allowed: {allowed}")
-    return identity
-
-
-def _require_message_recipient(identity: str, root: Path | None = None) -> str:
-    allowed_set = project_config(root)["message_recipients"]
-    if identity not in allowed_set:
-        allowed = ", ".join(sorted(allowed_set))
-        raise BoardError(
-            f"unauthorized identity {identity!r} for message recipient; allowed: {allowed}"
-        )
-    return identity
-
-
-# A summary is the one line a reader sees in a listing. Past 300 characters it
-# stops being a summary and becomes the body pasted into the index, which is
-# what it exists to spare the reader. Enforced here rather than written down:
-# a convention I can forget is not a bound, and this one was forgotten.
-MAX_SUMMARY_CHARS = 300
-
-
-def _require_summary(value: str) -> str:
-    summary = _require_text("summary", value)
-    if len(summary) > MAX_SUMMARY_CHARS:
-        raise BoardError(
-            f"summary is {len(summary)} characters, over the "
-            f"{MAX_SUMMARY_CHARS}-character cap by {len(summary) - MAX_SUMMARY_CHARS}. "
-            "Put the detail in --body-file and keep the summary to the one line a "
-            "reader needs to decide whether to open the message."
-        )
-    return summary
-
-
-def _require_text(label: str, value: str) -> str:
-    value = value.strip()
-    if not value:
-        raise BoardError(f"{label} must not be empty")
-    if "\n" in value or "\r" in value:
-        raise BoardError(f"{label} must be one line")
-    return value
-
-
-def _require_safe_token(label: str, value: str) -> str:
-    if not SAFE_TOKEN.fullmatch(value):
-        raise BoardError(f"invalid {label} {value!r}")
-    return value
-
-
-def discover_git_common_dir(repo: Path | str | None = None) -> Path:
-    """Resolve Git's shared administrative directory for the selected worktree."""
-
-    cwd = Path(repo or Path.cwd()).resolve()
-    completed = subprocess.run(
-        ["git", "rev-parse", "--git-common-dir"],
-        cwd=cwd,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip() or "unknown git error"
-        raise BoardError(f"cannot resolve git common dir from {cwd}: {detail}")
-    raw = completed.stdout.strip()
-    if not raw:
-        raise BoardError("git returned an empty common directory")
-    common = Path(raw)
-    if not common.is_absolute():
-        common = cwd / common
-    return common.resolve()
-
-
-# One store per repo, git-local, under this fixed directory name.
-STORE_DIRECTORY = "agent-board"
-
-
 def board_root(repo: Path | str | None = None) -> Path:
     return discover_git_common_dir(repo) / STORE_DIRECTORY
 
@@ -211,87 +120,10 @@ def initialize(root: Path) -> Path:
     return root
 
 
-def default_project_config() -> dict[str, Any]:
-    """Seed values only: every new store starts with the same neutral vocabulary."""
-
-    return {key: list(DEFAULT_PROJECT_CONFIG[key]) for key in PROJECT_CONFIG_KEYS}
-
-
-def seed_project_config(root: Path) -> Path | None:
-    """Written by `init` only. A store without the file keeps the historical vocabulary, unchanged."""
-
-    path = Path(root) / PROJECT_CONFIG_FILE
-    if path.exists():
-        return None
-    _write_exclusive(path, _canonical_json(default_project_config()))
-    return path
-
-
-def _validated_project_config(raw: Any) -> dict[str, Any]:
-    defaults = default_project_config()
-    if not isinstance(raw, dict):
-        raise BoardError(f"{PROJECT_CONFIG_FILE} must be a JSON object")
-    value: dict[str, Any] = {}
-    for key in PROJECT_CONFIG_KEYS:
-        entries = raw.get(key, defaults[key])
-        if not isinstance(entries, list) or any(not isinstance(entry, str) for entry in entries):
-            raise BoardError(f"{PROJECT_CONFIG_FILE}: {key} must be a list of strings")
-        value[key] = [_require_safe_token(f"{key} entry", entry) for entry in entries]
-    if not value["identities"]:
-        raise BoardError(f"{PROJECT_CONFIG_FILE}: identities must not be empty")
-    return value
-
-
-def project_config(root: Path | None) -> dict[str, Any]:
-    """The project's vocabulary, as frozensets. root None = the historical default identities (back-compatible)."""
-
-    if root is None:
-        return {
-            "identities": IDENTITIES,
-            "message_senders": MESSAGE_SENDERS,
-            "message_recipients": MESSAGE_RECIPIENTS,
-            "roadmap_owners": ROADMAP_OWNERS,
-            "workstreams": (),
-        }
-    path = Path(root) / PROJECT_CONFIG_FILE
-    try:
-        stamp = path.stat().st_mtime_ns
-    except OSError:
-        stamp = -1
-    key = str(path)
-    with _PROJECT_CONFIG_LOCK:
-        cached = _PROJECT_CONFIG_CACHE.get(key)
-        if cached is not None and cached[0] == stamp:
-            return cached[1]
-    if stamp == -1:  # no file: the historical vocabulary, so an existing store never changes meaning
-        return project_config(None)
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise BoardError(f"{PROJECT_CONFIG_FILE} is unreadable: {exc}") from exc
-    value = _validated_project_config(raw)
-    identities = frozenset(value["identities"])
-    participants = identities | frozenset(value["message_participants"])
-    sets = {
-        "identities": identities,
-        "message_senders": participants,
-        "message_recipients": participants,
-        "roadmap_owners": identities | frozenset(value["roadmap_owners"]),
-        "workstreams": tuple(value["workstreams"]),
-    }
-    with _PROJECT_CONFIG_LOCK:
-        _PROJECT_CONFIG_CACHE[key] = (stamp, sets)
-    return sets
-
-
 def _store_root_of(path: Path) -> Path:
     """messages/<id>.md, status/<actor>.json … all sit one directory below the store root."""
 
     return path.parent.parent
-
-
-def _canonical_json(value: Mapping[str, Any]) -> str:
-    return json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
 def _is_reparse_point(file_stat: os.stat_result) -> bool:
@@ -436,124 +268,6 @@ def _read_bounded_runtime_json(
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise BoardError(f"invalid runtime JSON: {path.name}") from exc
-
-
-@contextmanager
-def _file_lock(path: Path, timeout_seconds: float = 5.0) -> Iterable[None]:
-    """Hold a one-byte OS lock until the protected filesystem operation ends."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with path.open("xb") as initializer:
-            initializer.write(b"0")
-            initializer.flush()
-    except FileExistsError:
-        pass
-    deadline = time.monotonic() + timeout_seconds
-    handle = None
-    locked = False
-    try:
-        while not locked:
-            candidate = None
-            try:
-                candidate = path.open("r+b")
-                if path.stat().st_size < 1:
-                    raise PermissionError("lock sentinel is still initializing")
-                candidate.seek(0)
-                if os.name == "nt":
-                    import msvcrt
-
-                    msvcrt.locking(candidate.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(candidate.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                handle = candidate
-                candidate = None
-                locked = True
-            except OSError as exc:
-                if candidate is not None:
-                    candidate.close()
-                if time.monotonic() >= deadline:
-                    raise BoardError(f"timed out waiting for filesystem lock: {path.name}") from exc
-                time.sleep(0.01)
-        yield
-    finally:
-        if locked:
-            handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        if handle is not None:
-            handle.close()
-
-
-def _exclusive_lock_path(path: Path) -> Path:
-    """Map a runtime target (``<root>/<subdir>/<name>``) to its lock file.
-
-    Locks live in a dedicated ``<root>/locks/`` directory instead of beside
-    their target so ``messages/`` (opened directly in Explorer) never
-    accumulates one dotfile per message ever written.
-    """
-
-    root = path.parent.parent
-    flattened = f"{path.parent.name}--{path.name}.lock"
-    return root / "locks" / flattened
-
-
-def _write_exclusive(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _file_lock(_exclusive_lock_path(path)):
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-        )
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-            # Hard-link publication is atomic and create-exclusive. The final
-            # path cannot expose the temporary file until every byte is durable.
-            os.link(temporary_name, path)
-        finally:
-            try:
-                os.unlink(temporary_name)
-            except FileNotFoundError:
-                pass
-
-
-def _write_atomic_replace(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        for attempt in range(12):
-            try:
-                os.replace(temporary_name, path)
-                break
-            except PermissionError:
-                if attempt == 11:
-                    raise
-                # Windows can briefly deny replacement while another reader or
-                # replacer closes the destination handle. Keep the operation
-                # bounded and preserve the same atomic replace primitive.
-                time.sleep(min(0.002 * (2**attempt), 0.05))
-    except BaseException:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-        raise
 
 
 def _new_message_id() -> str:
@@ -1200,7 +914,7 @@ def upsert_roadmap_item(
         existing = next((item for item in store["items"] if item["id"] == item_id), None)
         current_revision = existing["revision"] if existing else 0
         if expected_revision != current_revision:
-            raise BoardError(
+            raise RevisionConflict(
                 f"roadmap revision conflict for {item_id}: expected {expected_revision}, "
                 f"current {current_revision}"
             )
@@ -1245,6 +959,11 @@ def build_parser(config: Mapping[str, Any] | None = None) -> argparse.ArgumentPa
     parser.add_argument("--repo", type=Path, help="worktree used to resolve the Git common dir")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    changes = subparsers.add_parser("message-changes", help="read resumable immutable messages")
+    changes.add_argument("--cursor")
+    changes.add_argument("--limit", type=int, default=100)
+    changes.add_argument("--actor", help="filter recipient")
+    subparsers.add_parser("capabilities", help="print machine-readable commands and conventions")
     subparsers.add_parser("init", help="create the shared runtime directories")
 
     maintenance = subparsers.add_parser(
@@ -1300,6 +1019,8 @@ def build_parser(config: Mapping[str, Any] | None = None) -> argparse.ArgumentPa
     actor_register.add_argument("--role", required=True, choices=[role.lower() for role in _tickets_module().ACTOR_ROLES])
     actor_register.add_argument("--display", default="")
     actor_register.add_argument("--master", help="owning master, for a subagent not named <master>/<name>")
+    actor_context = actor_commands.add_parser("context", help="show eligible work and next actions for an actor")
+    actor_context.add_argument("name")
     actor_list = actor_commands.add_parser("list", help="list registered actors")
     actor_list.add_argument("--role", choices=[role.lower() for role in _tickets_module().ACTOR_ROLES])
 
@@ -1322,7 +1043,7 @@ def build_parser(config: Mapping[str, Any] | None = None) -> argparse.ArgumentPa
     for target in (roadmap_upsert,):
         _add_roadmap_extension_flags(target)
     # Additive (2026-09-01): tree/annotate read and write the sidecar only; roadmap.v1.json stays frozen.
-    roadmap_tree = roadmap_commands.add_parser("tree", help="print the parent/child tree with status, progress, blockers, gates")
+    roadmap_tree = roadmap_commands.add_parser("tree", help="print the tree and journal revisions unless --no-journal is set")
     roadmap_tree.add_argument("--root", help="only this item and its descendants")
     roadmap_tree.add_argument("--since", type=float, default=24.0, help="hours; items updated within are marked *")
     roadmap_tree.add_argument("--json", action="store_true", help="print the full tree payload as JSON")
@@ -1447,6 +1168,7 @@ def _add_ticket_subparsers(subparsers: argparse._SubParsersAction, identities: S
     create = commands.add_parser("create", help="create a new ticket")
     create.add_argument("--actor", required=True, choices=identities)
     create.add_argument("--id", required=True, dest="ticket_id")
+    create.add_argument("--idempotency-key")
     create.add_argument("--title", required=True)
     create.add_argument("--kind", default="ENGINEERING", choices=tickets_module.TICKET_KINDS)
     create.add_argument("--summary", default="")
@@ -1486,6 +1208,8 @@ def _add_ticket_subparsers(subparsers: argparse._SubParsersAction, identities: S
     heartbeat.add_argument("--actor", required=True)
     heartbeat.add_argument("--id", required=True, dest="ticket_id")
     heartbeat.add_argument("--ttl-sec", type=int)
+    heartbeat.add_argument("--lease-token")
+    heartbeat.add_argument("--expected-revision", type=int)
 
     transition = commands.add_parser("transition", help="move a ticket to a new stage (not DONE; see done)")
     transition.add_argument("--actor", required=True, choices=identities)
@@ -1497,6 +1221,7 @@ def _add_ticket_subparsers(subparsers: argparse._SubParsersAction, identities: S
     comment = commands.add_parser("comment", help="attach a comment to a ticket")
     comment.add_argument("--actor", required=True)
     comment.add_argument("--id", required=True, dest="ticket_id")
+    comment.add_argument("--idempotency-key")
     comment.add_argument("--summary", required=True)
     comment_body = comment.add_mutually_exclusive_group()
     comment_body.add_argument("--body")
@@ -1506,6 +1231,7 @@ def _add_ticket_subparsers(subparsers: argparse._SubParsersAction, identities: S
     worklog = commands.add_parser("worklog", help="record evidence pointers: commit, test, or artifact")
     worklog.add_argument("--actor", required=True)
     worklog.add_argument("--id", required=True, dest="ticket_id")
+    worklog.add_argument("--idempotency-key")
     worklog.add_argument("--summary", required=True)
     worklog.add_argument("--repo", dest="evidence_repo")
     worklog.add_argument("--sha")
@@ -1536,6 +1262,50 @@ def _add_ticket_subparsers(subparsers: argparse._SubParsersAction, identities: S
     dep_add.add_argument("--type", required=True, dest="dep_type", choices=tickets_module.DEP_TYPES)
     dep_add.add_argument("--target", required=True)
 
+    claim = commands.add_parser("claim", help="atomically claim unleased work")
+    claim.add_argument("--actor", required=True)
+    claim.add_argument("--id", required=True, dest="ticket_id")
+    claim.add_argument("--expected-revision", type=int)
+    claim.add_argument("--ttl-sec", type=int, default=tickets_module.DEFAULT_LEASE_TTL_SEC)
+    claim.add_argument("--recover", action="store_true", help="explicitly recover an expired lease")
+    claim.add_argument("--idempotency-key")
+
+    handoff = commands.add_parser("handoff", help="atomically deliver evidence and transfer work")
+    handoff.add_argument("--actor", required=True)
+    handoff.add_argument("--id", required=True, dest="ticket_id")
+    handoff.add_argument("--summary", required=True)
+    handoff.add_argument("--body-file", type=Path)
+    handoff.add_argument("--next-actor", required=True)
+    handoff.add_argument("--stage", default="QA", choices=tickets_module.STAGES)
+    handoff.add_argument("--expected-revision", type=int)
+    handoff.add_argument("--lease-token")
+    handoff.add_argument("--idempotency-key")
+    handoff.add_argument("--repo", dest="evidence_repo")
+    handoff.add_argument("--sha")
+    handoff.add_argument("--test")
+    handoff.add_argument("--exit-code", type=int)
+    handoff.add_argument("--artifact")
+    handoff.add_argument("--content-hash")
+
+    dep_remove = commands.add_parser("dep-remove", help="remove a dependency and its reciprocal edge")
+    dep_remove.add_argument("--actor", required=True)
+    dep_remove.add_argument("--id", required=True, dest="ticket_id")
+    dep_remove.add_argument("--type", required=True, dest="dep_type", choices=tickets_module.DEP_TYPES)
+    dep_remove.add_argument("--target", required=True)
+    dep_remove.add_argument("--expected-revision", type=int)
+    dep_remove.add_argument("--idempotency-key")
+    dep_add.add_argument("--expected-revision", type=int)
+
+    changes = commands.add_parser("changes", help="read resumable ticket events")
+    changes.add_argument("--cursor")
+    changes.add_argument("--limit", type=int, default=100)
+    commands.add_parser("cache-verify", help="verify the rebuildable ticket projection")
+    commands.add_parser("cache-rebuild", help="rebuild ticket projection from event logs")
+    recover = commands.add_parser("recover", help="back up and remove a damaged final event record")
+    recover.add_argument("--id", required=True, dest="ticket_id")
+    recover.add_argument("--actor", required=True)
+    recover.add_argument("--expected-revision", type=int)
+
     list_cmd = commands.add_parser("list", help="list tickets")
     list_cmd.add_argument("--stage", choices=tickets_module.STAGES)
     list_cmd.add_argument("--assignee")
@@ -1559,6 +1329,38 @@ def _add_ticket_subparsers(subparsers: argparse._SubParsersAction, identities: S
 
     verify = commands.add_parser("verify", help="recompute one ticket's hash chain and report drift")
     verify.add_argument("id")
+
+
+def capabilities(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Describe the real parser so command/option discovery stays in sync."""
+    def describe(parser: argparse.ArgumentParser) -> dict[str, Any]:
+        options = []
+        commands = {}
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                commands = {name: describe(child) for name, child in action.choices.items()}
+            elif action.dest != "help":
+                value_type = "string"
+                if isinstance(action, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
+                    value_type = "boolean"
+                elif action.type is int:
+                    value_type = "integer"
+                elif action.type is float:
+                    value_type = "number"
+                options.append({"name": action.dest, "flags": action.option_strings,
+                                "type": value_type, "repeatable": isinstance(action, argparse._AppendAction),
+                                "required": action.required, "choices": list(action.choices) if action.choices is not None else None})
+        return {"options": options, "commands": commands}
+    return {"schema_version": 1, "cli": describe(build_parser(config)),
+            "ticket_stages": list(_tickets_module().STAGES),
+            "conventions": {"encoding": "utf-8", "store": "<git-common-dir>/agent-board",
+                            "canonical_ids_immutable": True, "roadmap_tree_journals_by_default": True,
+                            "change_feed": "ticket events and immutable messages", "hashes": "corruption detection, not authorship proof"},
+            "http": {"capabilities": "/api/capabilities", "actor_context": "/api/actors/<actor>/context",
+                     "changes": "/api/tickets/changes", "message_changes": "/api/messages/changes", "cache_verify": "/api/tickets/cache/verify",
+                     "cache_rebuild": "/api/tickets/cache/rebuild", "ticket_actions": "/api/tickets/<id>/<action>",
+                     "write_token_header": "X-Agent-Board-Token"},
+            "idempotent_ticket_actions": ["create", "comment", "worklog", "claim", "handoff", "dep-remove"]}
 
 
 def _read_ticket_body(args: argparse.Namespace) -> str:
@@ -1592,6 +1394,7 @@ def _run_ticket_command(args: argparse.Namespace, root: Path) -> None:
                 actor=args.actor,
                 ticket_id=args.ticket_id,
                 title=args.title,
+                idempotency_key=args.idempotency_key,
                 kind=args.kind,
                 summary=args.summary,
                 body=_read_ticket_body(args),
@@ -1633,7 +1436,7 @@ def _run_ticket_command(args: argparse.Namespace, root: Path) -> None:
             )
         )
     elif command == "heartbeat":
-        _print_json(tickets_module.heartbeat_ticket(root, args.ticket_id, actor=args.actor, ttl_sec=args.ttl_sec))
+        _print_json(tickets_module.heartbeat_ticket(root, args.ticket_id, actor=args.actor, ttl_sec=args.ttl_sec, lease_token=args.lease_token, expected_revision=args.expected_revision))
     elif command == "transition":
         _print_json(
             tickets_module.transition_ticket(
@@ -1643,7 +1446,7 @@ def _run_ticket_command(args: argparse.Namespace, root: Path) -> None:
     elif command == "comment":
         _print_json(
             tickets_module.comment_ticket(
-                root, args.ticket_id, actor=args.actor, summary=args.summary, body=_read_ticket_body(args), expected_revision=args.expected_revision
+                root, args.ticket_id, actor=args.actor, summary=args.summary, body=_read_ticket_body(args), expected_revision=args.expected_revision, idempotency_key=args.idempotency_key
             )
         )
     elif command == "worklog":
@@ -1654,6 +1457,7 @@ def _run_ticket_command(args: argparse.Namespace, root: Path) -> None:
                 actor=args.actor,
                 summary=args.summary,
                 evidence=_ticket_evidence_from_args(args),
+                idempotency_key=args.idempotency_key,
                 expected_revision=args.expected_revision,
             )
         )
@@ -1670,7 +1474,21 @@ def _run_ticket_command(args: argparse.Namespace, root: Path) -> None:
             )
         )
     elif command == "dep-add":
-        _print_json(tickets_module.add_dependency(root, args.ticket_id, actor=args.actor, dep_type=args.dep_type, target=args.target))
+        _print_json(tickets_module.add_dependency(root, args.ticket_id, actor=args.actor, dep_type=args.dep_type, target=args.target, expected_revision=args.expected_revision))
+    elif command == "claim":
+        _print_json(tickets_module.claim_ticket(root, args.ticket_id, actor=args.actor, expected_revision=args.expected_revision, ttl_sec=args.ttl_sec, recover=args.recover, idempotency_key=args.idempotency_key))
+    elif command == "handoff":
+        _print_json(tickets_module.handoff_ticket(root, args.ticket_id, actor=args.actor, summary=args.summary, body=_read_ticket_body(args), evidence=_ticket_evidence_from_args(args), next_actor=args.next_actor, stage=args.stage, expected_revision=args.expected_revision, lease_token=args.lease_token, idempotency_key=args.idempotency_key))
+    elif command == "dep-remove":
+        _print_json(tickets_module.remove_dependency(root, args.ticket_id, actor=args.actor, dep_type=args.dep_type, target=args.target, expected_revision=args.expected_revision, idempotency_key=args.idempotency_key))
+    elif command == "changes":
+        _print_json(tickets_module.ticket_changes(root, cursor=args.cursor, limit=args.limit))
+    elif command == "cache-verify":
+        _print_json(tickets_module.verify_ticket_cache(root))
+    elif command == "cache-rebuild":
+        _print_json(tickets_module.rebuild_ticket_cache(root))
+    elif command == "recover":
+        _print_json(tickets_module.recover_ticket_tail(root, args.ticket_id, actor=args.actor, expected_revision=args.expected_revision))
     elif command == "list":
         _print_json(tickets_module.list_tickets(root, stage=args.stage, assignee=args.assignee, parent_id=args.parent, include_archived=args.include_archived))
     elif command == "get":
@@ -1712,7 +1530,11 @@ def _project_hint(argv: Sequence[str] | None) -> dict[str, Any]:
 
 
 def run(argv: Sequence[str] | None = None) -> int:
-    args = build_parser(_project_hint(argv)).parse_args(argv)
+    config = _project_hint(argv)
+    args = build_parser(config).parse_args(argv)
+    if args.command == "capabilities":
+        _print_json(capabilities(config))
+        return 0
     if args.command == "maintenance" and args.maintenance_root is not None:
         root = args.maintenance_root
     else:
@@ -1724,6 +1546,12 @@ def run(argv: Sequence[str] | None = None) -> int:
             print(seeded)
     elif args.command == "maintenance":
         _print_json(remove_stale_locks(root))
+    elif args.command == "message-changes":
+        try:
+            from agent_board.changes import message_changes
+        except ImportError:
+            from changes import message_changes
+        _print_json(message_changes(root, cursor=args.cursor, limit=args.limit, actor=args.actor))
     elif args.command == "post":
         _print_json(
             post_message(
@@ -1777,6 +1605,8 @@ def run(argv: Sequence[str] | None = None) -> int:
                     root, args.name, role=args.role.upper(), display=args.display, master=args.master
                 )
             )
+        elif args.actor_command == "context":
+            _print_json(tickets_module.actor_context(root, actor=args.name))
         elif args.actor_command == "list":
             _print_json(tickets_module.list_actors(root, role=args.role.upper() if args.role else None))
     elif args.command == "roadmap":
